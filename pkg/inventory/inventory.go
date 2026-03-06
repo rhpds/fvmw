@@ -234,13 +234,12 @@ func createVMs(cfg *Config, client *vim25.Client, vmFolder *object.Folder, pool 
 			return fmt.Errorf("creating stub vmdk for %q: %w", vmCfg.Disk, writeErr)
 		}
 
-		// Create a -flat.vmdk symlink pointing to the actual VMDK in DiskPath.
+		// Create a -flat.vmdk symlink pointing to the flat VMDK in DiskPath.
 		// virt-v2v downloads the flat backing file via the /folder/ endpoint.
-		// The filename in the VMX is "database.vmdk" and virt-v2v looks for
-		// "database-flat.vmdk" at the same datastore path.
+		// The flat file must be raw disk blocks (monolithicFlat format).
 		flatName := strings.TrimSuffix(vmCfg.Disk, ".vmdk") + "-flat.vmdk"
 		flatPath := filepath.Join(datastoreDir, vmName, flatName)
-		realDisk := filepath.Join(cfg.DiskPath, vmCfg.Disk)
+		realDisk := filepath.Join(cfg.DiskPath, flatName)
 		_ = os.Symlink(realDisk, flatPath) // best effort
 
 		vmDiskPath := fmt.Sprintf("[%s] %s", cfg.Datastore, vmCfg.Disk)
