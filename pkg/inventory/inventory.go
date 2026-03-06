@@ -98,9 +98,21 @@ func Build(cfg *Config) (*simulator.Model, error) {
 		return nil, fmt.Errorf("getting resource pool: %w", err)
 	}
 
+	// Create VM folder if specified
+	vmFolder := folders.VmFolder
+	if cfg.Folder != "" {
+		vmFolder, err = folders.VmFolder.CreateFolder(context.Background(), cfg.Folder)
+		if err != nil {
+			return nil, fmt.Errorf("creating VM folder %q: %w", cfg.Folder, err)
+		}
+		log.Printf("Created VM folder: %s", cfg.Folder)
+	}
+
 	// Create VMs
 	for _, vmCfg := range cfg.VMs {
 		dsPath := fmt.Sprintf("[%s]", cfg.Datastore)
+
+		vmName := vmCfg.Name + cfg.UserSuffix
 
 		guestID := vmCfg.GuestID
 		if guestID == "" {
@@ -108,7 +120,7 @@ func Build(cfg *Config) (*simulator.Model, error) {
 		}
 
 		spec := types.VirtualMachineConfigSpec{
-			Name:     vmCfg.Name,
+			Name:     vmName,
 			GuestId:  guestID,
 			NumCPUs:  vmCfg.NumCPUs,
 			MemoryMB: int64(vmCfg.MemoryMB),
@@ -117,13 +129,13 @@ func Build(cfg *Config) (*simulator.Model, error) {
 			},
 		}
 
-		task, err := folders.VmFolder.CreateVM(context.Background(), spec, pool, host)
+		task, err := vmFolder.CreateVM(context.Background(), spec, pool, host)
 		if err != nil {
-			return nil, fmt.Errorf("creating VM %q: %w", vmCfg.Name, err)
+			return nil, fmt.Errorf("creating VM %q: %w", vmName, err)
 		}
 		result, err := task.WaitForResult(context.Background(), nil)
 		if err != nil {
-			return nil, fmt.Errorf("waiting for VM %q creation: %w", vmCfg.Name, err)
+			return nil, fmt.Errorf("waiting for VM %q creation: %w", vmName, err)
 		}
 		vmRef := result.Result.(types.ManagedObjectReference)
 		vm := object.NewVirtualMachine(client, vmRef)
@@ -161,20 +173,20 @@ func Build(cfg *Config) (*simulator.Model, error) {
 
 		reconfigTask, err := vm.Reconfigure(context.Background(), diskSpec)
 		if err != nil {
-			return nil, fmt.Errorf("adding disk to VM %q: %w", vmCfg.Name, err)
+			return nil, fmt.Errorf("adding disk to VM %q: %w", vmName, err)
 		}
 		if err := reconfigTask.Wait(context.Background()); err != nil {
-			return nil, fmt.Errorf("waiting for disk add on VM %q: %w", vmCfg.Name, err)
+			return nil, fmt.Errorf("waiting for disk add on VM %q: %w", vmName, err)
 		}
 
 		// Power on the VM
 		powerTask, err := vm.PowerOn(context.Background())
 		if err != nil {
-			return nil, fmt.Errorf("powering on VM %q: %w", vmCfg.Name, err)
+			return nil, fmt.Errorf("powering on VM %q: %w", vmName, err)
 		}
 		_ = powerTask.Wait(context.Background())
 
-		log.Printf("Created VM: %s (guest=%s, disk=%s)", vmCfg.Name, guestID, vmCfg.Disk)
+		log.Printf("Created VM: %s (guest=%s, disk=%s)", vmName, guestID, vmCfg.Disk)
 	}
 
 	return model, nil

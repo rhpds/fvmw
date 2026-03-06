@@ -21,6 +21,7 @@ type Config struct {
 	Host       string     `yaml:"host"`
 	Datastore  string     `yaml:"datastore"`
 	Network    string     `yaml:"network"`
+	Folder     string     `yaml:"folder"`
 	VMs        []VMConfig `yaml:"vms"`
 
 	// Runtime settings (not from YAML)
@@ -29,6 +30,7 @@ type Config struct {
 	ExternalHost string `yaml:"-"`
 	Username     string `yaml:"-"`
 	Password     string `yaml:"-"`
+	UserSuffix   string `yaml:"-"` // appended to VM names (e.g. "-user1")
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -63,6 +65,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("FVMW_PASSWORD"); v != "" {
 		c.Password = v
+	}
+	if v := os.Getenv("FVMW_USER_SUFFIX"); v != "" {
+		c.UserSuffix = v
 	}
 }
 
