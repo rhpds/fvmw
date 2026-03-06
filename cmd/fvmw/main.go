@@ -27,6 +27,12 @@ func main() {
 	log.Printf("Listen: %s, DiskPath: %s, ExternalHost: %s",
 		cfg.ListenAddr, cfg.DiskPath, cfg.ExternalHost)
 
+	// Enable SOAP trace logging if requested
+	if os.Getenv("FVMW_TRACE") != "" {
+		simulator.Trace = true
+		log.Println("SOAP trace logging enabled")
+	}
+
 	// Configure authentication before building the model
 	simulator.DefaultLogin = url.UserPassword(cfg.Username, cfg.Password)
 
