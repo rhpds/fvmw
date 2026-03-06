@@ -3,11 +3,15 @@ package main
 import (
 	"flag"
 	"log"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
+	"time"
 	"os/signal"
 	"syscall"
 
+	"github.com/rhpds/fvmw/pkg/fixup"
 	"github.com/rhpds/fvmw/pkg/inventory"
 	"github.com/rhpds/fvmw/pkg/nfc"
 	"github.com/vmware/govmomi/simulator"
@@ -49,22 +53,45 @@ func main() {
 	// Replace VM objects with wrapped versions that support ExportVm
 	diskServer.WrapVMs(model.Service.Context)
 
-	// Set the listen address for the vcsim server
-	model.Service.Listen = &url.URL{Host: cfg.ListenAddr}
-
 	// Register disk file serving handler on the service mux
 	model.Service.HandleFunc("/disk/", diskServer.ServeHTTP)
 
-	// Start the vcsim HTTP server
+	// Let vcsim set up all its internal handlers on a random port.
+	// We won't expose this port — we'll proxy through our own listener.
 	server := model.Service.NewServer()
 	defer server.Close()
 
-	// Set the server URL for disk download URLs (used when no external host is configured)
-	serverBase := &url.URL{Scheme: server.URL.Scheme, Host: server.URL.Host}
-	diskServer.ServerURL = serverBase.String()
+	// Set the server URL for disk download URLs
+	if cfg.ExternalHost != "" {
+		diskServer.ServerURL = ""
+	} else {
+		serverBase := &url.URL{Scheme: "http", Host: cfg.ListenAddr}
+		diskServer.ServerURL = serverBase.String()
+	}
 
-	log.Printf("vcsim server started on %s", server.URL)
-	log.Printf("SDK endpoint: %s/sdk", server.URL)
+	// Start our own HTTP listener that wraps vcsim's mux with the
+	// XML namespace rewriter. govmomi's encoder uses _XMLSchema-instance:
+	// instead of xsi: which breaks libvirt's ESX driver (used by virt-v2v).
+	rewriter := &fixup.XMLRewriter{Handler: model.Service.ServeMux}
+
+	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen on %s: %v", cfg.ListenAddr, err)
+	}
+
+	httpServer := &http.Server{
+		Handler:           rewriter,
+		ReadHeaderTimeout: 60 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Listening on %s", cfg.ListenAddr)
+		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	log.Println("fvmw ready")
 
 	// Wait for signal
 	sig := make(chan os.Signal, 1)
