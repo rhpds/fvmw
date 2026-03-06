@@ -22,7 +22,11 @@
     github_repo: rhpds/fvmw
     github_ref: main
     github_token: ""
+    k8s_kubeconfig: ""
     webhook_secret: "{{ lookup('password', '/dev/null chars=ascii_lowercase,digits length=32') }}"
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
 
   tasks:
     - name: Validate required variables

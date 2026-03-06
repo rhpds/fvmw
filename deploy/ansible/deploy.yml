@@ -27,6 +27,10 @@
     cluster_domain: ""
     storage_class: ""
     fvmw_disk_pvc: fvmw-disks
+    k8s_kubeconfig: ""
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
 
   tasks:
     - name: Validate required variables

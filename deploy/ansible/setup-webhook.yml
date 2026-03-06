@@ -20,6 +20,10 @@
     fvmw_namespace: fvmw
     github_repo: rhpds/fvmw
     github_token: ""
+    k8s_kubeconfig: ""
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
 
   tasks:
     - name: Validate required variables
