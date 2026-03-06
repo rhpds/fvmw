@@ -13,6 +13,7 @@ type VMConfig struct {
 	Disk     string `yaml:"disk"`
 	MemoryMB int32  `yaml:"memoryMB"`
 	NumCPUs  int32  `yaml:"numCPUs"`
+	Firmware string `yaml:"firmware"` // "bios" or "efi" (default: "bios")
 }
 
 type Config struct {

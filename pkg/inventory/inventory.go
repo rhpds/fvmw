@@ -119,11 +119,20 @@ func Build(cfg *Config) (*simulator.Model, error) {
 			guestID = string(types.VirtualMachineGuestOsIdentifierOtherGuest)
 		}
 
+		firmware := vmCfg.Firmware
+		if firmware == "" {
+			firmware = string(types.GuestOsDescriptorFirmwareTypeBios)
+		}
+
 		spec := types.VirtualMachineConfigSpec{
 			Name:     vmName,
 			GuestId:  guestID,
 			NumCPUs:  vmCfg.NumCPUs,
 			MemoryMB: int64(vmCfg.MemoryMB),
+			Firmware: firmware,
+			BootOptions: &types.VirtualMachineBootOptions{
+				EfiSecureBootEnabled: types.NewBool(false),
+			},
 			Files: &types.VirtualMachineFileInfo{
 				VmPathName: dsPath,
 			},
