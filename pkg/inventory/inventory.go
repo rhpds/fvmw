@@ -161,14 +161,34 @@ func Build(cfg *Config) (*simulator.Model, error) {
 
 		vmDiskPath := fmt.Sprintf("[%s] %s", cfg.Datastore, vmCfg.Disk)
 
-		unitNumber := int32(0)
+		// Add a PVSCSI controller and disk in one reconfigure call.
+		// MTV's inventory collector dereferences controller.Bus on each disk,
+		// so every disk must have a valid ControllerKey pointing to a SCSI controller.
+		scsiCtrlKey := int32(1000)
+		diskUnitNumber := int32(0)
 		diskSpec := types.VirtualMachineConfigSpec{
 			DeviceChange: []types.BaseVirtualDeviceConfigSpec{
 				&types.VirtualDeviceConfigSpec{
 					Operation: types.VirtualDeviceConfigSpecOperationAdd,
+					Device: &types.ParaVirtualSCSIController{
+						VirtualSCSIController: types.VirtualSCSIController{
+							VirtualController: types.VirtualController{
+								VirtualDevice: types.VirtualDevice{
+									Key: scsiCtrlKey,
+								},
+								BusNumber: 0,
+							},
+							SharedBus: types.VirtualSCSISharingNoSharing,
+						},
+					},
+				},
+				&types.VirtualDeviceConfigSpec{
+					Operation: types.VirtualDeviceConfigSpecOperationAdd,
 					Device: &types.VirtualDisk{
 						VirtualDevice: types.VirtualDevice{
-							UnitNumber: &unitNumber,
+							Key:           -1,
+							ControllerKey: scsiCtrlKey,
+							UnitNumber:    &diskUnitNumber,
 							Backing: &types.VirtualDiskFlatVer2BackingInfo{
 								VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
 									FileName: vmDiskPath,
@@ -176,7 +196,7 @@ func Build(cfg *Config) (*simulator.Model, error) {
 								DiskMode: string(types.VirtualDiskModePersistent),
 							},
 						},
-						CapacityInBytes: 10 * 1024 * 1024 * 1024, // 10 GB default
+						CapacityInBytes: 10 * 1024 * 1024 * 1024,
 					},
 				},
 			},
