@@ -29,19 +29,24 @@ Ansible playbooks to deploy fvmw (Fake VMware) for MTV migration demos.
 The disk server hosts flat VMDK images that workshop clusters download.
 Run this once on a persistent infra cluster.
 
-**Prerequisites:** A PVC with flat VMDK files (`*-flat.vmdk`). See the
-main [README](../../README.md#disk-preparation) for how to export from
-a real vCenter and convert to flat format.
+**Prerequisites:** cluster-admin on the infra cluster and access to a real
+vCenter with the source VMs.
 
 ```bash
 cp ../../local.env.example ../../local.env
-vi ../../local.env  # Set infra cluster kubeconfig and domain
+vi ../../local.env
+# Set: k8s_kubeconfig, cluster_domain, source_vcenter_url/user/password
 
 ansible-playbook disk-server.yml -e @../../local.env
 ```
 
-This creates an nginx pod serving files from the PVC via HTTPS.
-Note the URL — workshop clusters need it in their config.
+This playbook:
+1. Creates a 100Gi CephFS PVC
+2. Exports VMDKs from the real vCenter via `govc export.ovf`
+3. Converts to monolithicFlat format with `qemu-img`
+4. Deploys nginx to serve the flat VMDKs via HTTPS
+
+Note the output URL — workshop clusters need it as `disk_source_url`.
 
 ---
 
