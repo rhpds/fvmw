@@ -297,10 +297,44 @@ func createVMs(cfg *Config, client *vim25.Client, vmFolder *object.Folder, pool 
 			return fmt.Errorf("waiting for disk add on VM %q: %w", vmName, err)
 		}
 
+		// Write VMX content to the .vmx file that vcsim created.
+		// libvirt's ESX driver downloads this via the /folder/ endpoint
+		// and parses it to build the domain XML.
+		vmxPath := filepath.Join(datastoreDir, vmName, vmName+".vmx")
+		vmxContent := generateVMX(vmName, guestID, vmCfg)
+		if err := os.WriteFile(vmxPath, []byte(vmxContent), 0600); err != nil {
+			log.Printf("Warning: could not write VMX for %s: %v", vmName, err)
+		}
+
 		log.Printf("Created VM: %s (guest=%s, disk=%s, %dGB)", vmName, guestID, vmCfg.Disk, vmCfg.DiskSizeGB)
 	}
 
 	return nil
+}
+
+func generateVMX(vmName, guestID string, cfg VMConfig) string {
+	scsiType := "pvscsi"
+	if cfg.DiskController == "lsilogic-sas" {
+		scsiType = "lsilogic"
+	}
+
+	return fmt.Sprintf(`.encoding = "UTF-8"
+config.version = "8"
+virtualHW.version = "19"
+displayName = "%s"
+guestOS = "%s"
+memSize = "%d"
+numvcpus = "%d"
+firmware = "%s"
+scsi0.present = "TRUE"
+scsi0.virtualDev = "%s"
+scsi0:0.present = "TRUE"
+scsi0:0.fileName = "%s"
+scsi0:0.deviceType = "scsi-hardDisk"
+ethernet0.present = "TRUE"
+ethernet0.virtualDev = "vmxnet3"
+ethernet0.connectionType = "bridged"
+`, vmName, guestID, cfg.MemoryMB, cfg.NumCPUs, cfg.Firmware, scsiType, cfg.Disk)
 }
 
 func diskCapacityBytes(sizeGB int64) int64 {
