@@ -161,26 +161,41 @@ func Build(cfg *Config) (*simulator.Model, error) {
 
 		vmDiskPath := fmt.Sprintf("[%s] %s", cfg.Datastore, vmCfg.Disk)
 
-		// Add a PVSCSI controller and disk in one reconfigure call.
+		// Add a SCSI controller and disk in one reconfigure call.
 		// MTV's inventory collector dereferences controller.Bus on each disk,
 		// so every disk must have a valid ControllerKey pointing to a SCSI controller.
 		scsiCtrlKey := int32(1000)
 		diskUnitNumber := int32(0)
+
+		var scsiController types.BaseVirtualDevice
+		switch vmCfg.DiskController {
+		case "lsilogic-sas":
+			scsiController = &types.VirtualLsiLogicSASController{
+				VirtualSCSIController: types.VirtualSCSIController{
+					VirtualController: types.VirtualController{
+						VirtualDevice: types.VirtualDevice{Key: scsiCtrlKey},
+						BusNumber:     0,
+					},
+					SharedBus: types.VirtualSCSISharingNoSharing,
+				},
+			}
+		default: // "pvscsi" or empty
+			scsiController = &types.ParaVirtualSCSIController{
+				VirtualSCSIController: types.VirtualSCSIController{
+					VirtualController: types.VirtualController{
+						VirtualDevice: types.VirtualDevice{Key: scsiCtrlKey},
+						BusNumber:     0,
+					},
+					SharedBus: types.VirtualSCSISharingNoSharing,
+				},
+			}
+		}
+
 		diskSpec := types.VirtualMachineConfigSpec{
 			DeviceChange: []types.BaseVirtualDeviceConfigSpec{
 				&types.VirtualDeviceConfigSpec{
 					Operation: types.VirtualDeviceConfigSpecOperationAdd,
-					Device: &types.ParaVirtualSCSIController{
-						VirtualSCSIController: types.VirtualSCSIController{
-							VirtualController: types.VirtualController{
-								VirtualDevice: types.VirtualDevice{
-									Key: scsiCtrlKey,
-								},
-								BusNumber: 0,
-							},
-							SharedBus: types.VirtualSCSISharingNoSharing,
-						},
-					},
+					Device:    scsiController,
 				},
 				&types.VirtualDeviceConfigSpec{
 					Operation: types.VirtualDeviceConfigSpecOperationAdd,

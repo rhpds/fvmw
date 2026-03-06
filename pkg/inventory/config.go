@@ -8,12 +8,13 @@ import (
 )
 
 type VMConfig struct {
-	Name     string `yaml:"name"`
-	GuestID  string `yaml:"guestId"`
-	Disk     string `yaml:"disk"`
-	MemoryMB int32  `yaml:"memoryMB"`
-	NumCPUs  int32  `yaml:"numCPUs"`
-	Firmware string `yaml:"firmware"` // "bios" or "efi" (default: "bios")
+	Name           string `yaml:"name"`
+	GuestID        string `yaml:"guestId"`
+	Disk           string `yaml:"disk"`
+	MemoryMB       int32  `yaml:"memoryMB"`
+	NumCPUs        int32  `yaml:"numCPUs"`
+	Firmware       string `yaml:"firmware"`       // "bios" or "efi" (default: "bios")
+	DiskController string `yaml:"diskController"` // "pvscsi" or "lsilogic-sas" (default: "pvscsi")
 }
 
 type Config struct {
