@@ -18,36 +18,48 @@ Ansible playbooks to deploy and manage fvmw instances on OpenShift.
 | `bootstrap.yml` | One-time namespace, SA, RBAC, kubeconfig setup | cluster-admin |
 | `build.yml` | BuildConfig, ImageStream, GitHub webhook | SA kubeconfig |
 | `deploy.yml` | Per-user VPX + ESXi pods, services, routes | SA kubeconfig |
-| `disk-server.yml` | VMDK disk server on infra cluster | SA kubeconfig |
+| `disk-server.yml` | VMDK disk server on infra cluster | cluster-admin on infra cluster |
 | `setup-webhook.yml` | Register GitHub webhook via API | SA kubeconfig + github_token |
 
 ## Quick Start (Workshop)
 
-For workshop environments, use the all-in-one setup:
+For workshop environments, `workshop-setup.yml` is the **only playbook you need**.
+It handles everything: build, disk download, pod deployment, and MTV configuration.
 
 ```bash
 cp ../../workshop-deploy.env.example ../../workshop-deploy.env
 vi ../../workshop-deploy.env
 
-# Build fvmw image first
-ansible-playbook build.yml -e @../../workshop-deploy.env
-
-# Then run full setup (PVC, disks, pods, MTV providers)
+cd deploy/ansible
 ansible-playbook workshop-setup.yml -e @../../workshop-deploy.env
 ```
 
-This downloads flat VMDKs from the configured disk server,
-deploys fvmw pods, and creates MTV providers for each user.
+This single command:
+1. Builds the fvmw container image from GitHub
+2. Creates the shared PVC and downloads flat VMDKs from the disk server
+3. Deploys vcenter + esxi pod pairs per user
+4. Creates MTV providers, network/storage mappings, and target namespaces
 
-## Disk Server (Infra Cluster)
+The other playbooks (`bootstrap.yml`, `build.yml`, `deploy.yml`) are for
+individual operations when you need more control.
 
-The infra cluster hosts flat VMDK files for workshop clusters to download:
+## Disk Server (Infra Admin, One-Time)
+
+The disk server is a one-time deployment on the infra cluster. It hosts flat
+VMDK files that workshop clusters download during setup.
 
 ```bash
+# Run once by an infra admin with cluster-admin on the infra cluster
 ansible-playbook disk-server.yml -e @../../local.env
 ```
 
-URL: `https://fvmw-disks.<infra_cluster_domain>/`
+This creates an nginx pod that serves the flat VMDKs from the infra cluster's
+PVC via HTTPS at `https://fvmw-disks.<infra_cluster_domain>/`.
+
+Workshop clusters reference this URL in `workshop-deploy.env`:
+```yaml
+disk_source_url: https://fvmw-disks.<infra_cluster_domain>
+```
 
 ## Initial Setup
 

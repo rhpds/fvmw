@@ -72,12 +72,70 @@
         state: present
 
     # --- Step 2: Build fvmw image ---
-    - name: Run build playbook
-      ansible.builtin.include_tasks: tasks/workshop-build.yml
-      when: false  # Skip if using pre-built image; set to true to build from source
+    - name: Create source secret for private repo
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: github-source-secret
+            namespace: "{{ fvmw_namespace }}"
+            annotations:
+              build.openshift.io/source-secret-match-uri-1: "https://github.com/rhpds/*"
+          type: kubernetes.io/basic-auth
+          stringData:
+            password: "{{ github_token }}"
+      when: github_token | length > 0
 
-    # For now, just run build.yml separately:
-    # ansible-playbook build.yml -e @../../workshop-deploy.env
+    - name: Create ImageStream
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: image.openshift.io/v1
+          kind: ImageStream
+          metadata:
+            name: fvmw
+            namespace: "{{ fvmw_namespace }}"
+
+    - name: Create BuildConfig
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: build.openshift.io/v1
+          kind: BuildConfig
+          metadata:
+            name: fvmw
+            namespace: "{{ fvmw_namespace }}"
+          spec:
+            source:
+              type: Git
+              git:
+                uri: https://github.com/rhpds/fvmw.git
+                ref: main
+              sourceSecret: "{{ {'name': 'github-source-secret'} if github_token | length > 0 else omit }}"
+            strategy:
+              type: Docker
+              dockerStrategy:
+                dockerfilePath: build/Containerfile
+            output:
+              to:
+                kind: ImageStreamTag
+                name: fvmw:latest
+            triggers:
+              - type: ConfigChange
+
+    - name: Wait for build to complete
+      kubernetes.core.k8s_info:
+        api_version: build.openshift.io/v1
+        kind: Build
+        namespace: "{{ fvmw_namespace }}"
+        label_selectors:
+          - "buildconfig=fvmw"
+      register: builds
+      until: builds.resources | selectattr('status.phase', 'equalto', 'Complete') | list | length > 0
+      retries: 30
+      delay: 10
 
     # --- Step 3: Deploy fvmw infrastructure (PVC, credentials, pods) ---
     - name: Create shared disk PVC
