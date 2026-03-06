@@ -8,6 +8,7 @@ vms:
   - name: "database"
     guestId: "centos8_64Guest"
     disk: "database.vmdk"
+    diskSizeGB: 5
     memoryMB: 2048
     numCPUs: 1
     firmware: "efi"
@@ -15,6 +16,7 @@ vms:
   - name: "winweb01"
     guestId: "windows2019srvNext_64Guest"
     disk: "winweb01.vmdk"
+    diskSizeGB: 21
     memoryMB: 6144
     numCPUs: 2
     firmware: "efi"
@@ -22,6 +24,7 @@ vms:
   - name: "winweb02"
     guestId: "windows2019srvNext_64Guest"
     disk: "winweb02.vmdk"
+    diskSizeGB: 21
     memoryMB: 6144
     numCPUs: 2
     firmware: "efi"
@@ -29,6 +32,7 @@ vms:
   - name: "haproxy"
     guestId: "other26xLinux64Guest"
     disk: "haproxy.vmdk"
+    diskSizeGB: 4
     memoryMB: 4096
     numCPUs: 2
     firmware: "efi"

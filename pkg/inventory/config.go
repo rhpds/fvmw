@@ -11,6 +11,7 @@ type VMConfig struct {
 	Name           string `yaml:"name"`
 	GuestID        string `yaml:"guestId"`
 	Disk           string `yaml:"disk"`
+	DiskSizeGB     int64  `yaml:"diskSizeGB"`     // disk capacity in GB (default: 10)
 	MemoryMB       int32  `yaml:"memoryMB"`
 	NumCPUs        int32  `yaml:"numCPUs"`
 	Firmware       string `yaml:"firmware"`       // "bios" or "efi" (default: "bios")

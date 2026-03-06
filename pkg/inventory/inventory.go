@@ -211,7 +211,7 @@ func Build(cfg *Config) (*simulator.Model, error) {
 								DiskMode: string(types.VirtualDiskModePersistent),
 							},
 						},
-						CapacityInBytes: 10 * 1024 * 1024 * 1024,
+						CapacityInBytes: diskCapacityBytes(vmCfg.DiskSizeGB),
 					},
 				},
 			},
@@ -225,15 +225,15 @@ func Build(cfg *Config) (*simulator.Model, error) {
 			return nil, fmt.Errorf("waiting for disk add on VM %q: %w", vmName, err)
 		}
 
-		// Power on the VM
-		powerTask, err := vm.PowerOn(context.Background())
-		if err != nil {
-			return nil, fmt.Errorf("powering on VM %q: %w", vmName, err)
-		}
-		_ = powerTask.Wait(context.Background())
-
-		log.Printf("Created VM: %s (guest=%s, disk=%s)", vmName, guestID, vmCfg.Disk)
+		log.Printf("Created VM: %s (guest=%s, disk=%s, %dGB)", vmName, guestID, vmCfg.Disk, vmCfg.DiskSizeGB)
 	}
 
 	return model, nil
+}
+
+func diskCapacityBytes(sizeGB int64) int64 {
+	if sizeGB <= 0 {
+		sizeGB = 10
+	}
+	return sizeGB * 1024 * 1024 * 1024
 }
