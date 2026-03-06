@@ -1,0 +1,167 @@
+---
+# bootstrap.yml - One-time setup of namespace, service account, and RBAC
+#
+# Run this once with cluster-admin credentials to create:
+#   - fvmw namespace
+#   - fvmw-mgmt ServiceAccount with minimal privileges
+#   - Long-lived token and kubeconfig for subsequent operations
+#
+# Usage:
+#   oc login <cluster> --as=admin
+#   ansible-playbook bootstrap.yml -e @../../local.env
+#
+# After this, all other playbooks use the generated kubeconfig.
+
+- name: Bootstrap fvmw namespace and service account
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    fvmw_namespace: fvmw
+    kubeconfig_output: ~/secrets/fvmw-mgmt.kubeconfig
+
+  tasks:
+    - name: Create namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ fvmw_namespace }}"
+        state: present
+
+    - name: Create fvmw-mgmt ServiceAccount
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: fvmw-mgmt
+            namespace: "{{ fvmw_namespace }}"
+
+    - name: Create ClusterRole with minimal permissions
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: fvmw-mgmt
+          rules:
+            - apiGroups: [""]
+              resources: ["namespaces"]
+              verbs: ["get", "list", "create", "update", "patch"]
+            - apiGroups: [""]
+              resources: ["services", "secrets", "persistentvolumeclaims"]
+              verbs: ["get", "list", "create", "update", "patch", "delete"]
+            - apiGroups: [""]
+              resources: ["pods", "pods/log"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["apps"]
+              resources: ["deployments"]
+              verbs: ["get", "list", "create", "update", "patch", "delete"]
+            - apiGroups: ["route.openshift.io"]
+              resources: ["routes"]
+              verbs: ["get", "list", "create", "update", "patch", "delete"]
+            - apiGroups: ["build.openshift.io"]
+              resources: ["buildconfigs", "builds", "buildconfigs/instantiate"]
+              verbs: ["get", "list", "create", "update", "patch", "delete"]
+            - apiGroups: ["image.openshift.io"]
+              resources: ["imagestreams", "imagestreamtags"]
+              verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+    - name: Bind ClusterRole to ServiceAccount
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: fvmw-mgmt
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: fvmw-mgmt
+          subjects:
+            - kind: ServiceAccount
+              name: fvmw-mgmt
+              namespace: "{{ fvmw_namespace }}"
+
+    - name: Create long-lived token secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: fvmw-mgmt-token
+            namespace: "{{ fvmw_namespace }}"
+            annotations:
+              kubernetes.io/service-account.name: fvmw-mgmt
+          type: kubernetes.io/service-account-token
+
+    - name: Wait for token to be populated
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: fvmw-mgmt-token
+        namespace: "{{ fvmw_namespace }}"
+      register: token_secret
+      until: token_secret.resources[0].data.token is defined
+      retries: 10
+      delay: 2
+
+    - name: Extract token
+      ansible.builtin.set_fact:
+        sa_token: "{{ token_secret.resources[0].data.token | b64decode }}"
+
+    - name: Get cluster API server
+      kubernetes.core.k8s_cluster_info:
+      register: cluster_info
+
+    - name: Generate kubeconfig
+      ansible.builtin.copy:
+        dest: "{{ kubeconfig_output }}"
+        mode: "0600"
+        content: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - name: fvmw-cluster
+              cluster:
+                server: {{ cluster_info.connection.host }}
+                insecure-skip-tls-verify: true
+          contexts:
+            - name: fvmw-mgmt
+              context:
+                cluster: fvmw-cluster
+                namespace: {{ fvmw_namespace }}
+                user: fvmw-mgmt
+          current-context: fvmw-mgmt
+          users:
+            - name: fvmw-mgmt
+              user:
+                token: {{ sa_token }}
+
+    - name: Verify kubeconfig works
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ fvmw_namespace }}"
+        kubeconfig: "{{ kubeconfig_output }}"
+      register: verify_result
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: |
+          Bootstrap complete.
+
+          ServiceAccount: fvmw-mgmt (namespace: {{ fvmw_namespace }})
+          Kubeconfig:     {{ kubeconfig_output }}
+
+          Add to your local.env:
+            k8s_kubeconfig: {{ kubeconfig_output }}
+
+          All subsequent playbooks will use this kubeconfig:
+            ansible-playbook build.yml -e @../../local.env
+            ansible-playbook deploy.yml -e @../../local.env
