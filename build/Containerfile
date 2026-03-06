@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o fvmw ./cmd/fvmw/
 
-FROM registry.access.redhat.com/ubi9-micro:latest
+FROM registry.access.redhat.com/ubi9-minimal:latest
 
 COPY --from=builder /build/fvmw /usr/local/bin/fvmw
 COPY config/default.yaml /config/default.yaml

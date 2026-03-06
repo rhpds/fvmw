@@ -53,7 +53,7 @@
                     volumeMounts:
                       - name: disks
                         mountPath: /disks
-                        readOnly: true
+                        readOnly: false
                     resources:
                       requests:
                         cpu: 50m
@@ -77,7 +77,6 @@
                   - name: disks
                     persistentVolumeClaim:
                       claimName: "{{ fvmw_disk_pvc }}"
-                      readOnly: true
 
     - name: "Create Service for {{ fvmw_user }}"
       kubernetes.core.k8s:

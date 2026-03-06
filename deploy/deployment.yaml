@@ -45,7 +45,6 @@ spec:
           volumeMounts:
             - name: disks
               mountPath: /disks
-              readOnly: true
           resources:
             requests:
               cpu: 50m

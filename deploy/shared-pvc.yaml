@@ -4,7 +4,7 @@ metadata:
   name: fvmw-disks
 spec:
   accessModes:
-    - ReadOnlyMany
+    - ReadWriteMany
   resources:
     requests:
       storage: 50Gi

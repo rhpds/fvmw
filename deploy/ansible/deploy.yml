@@ -55,7 +55,7 @@
             namespace: "{{ fvmw_namespace }}"
           spec:
             accessModes:
-              - ReadOnlyMany
+              - ReadWriteMany
             resources:
               requests:
                 storage: 50Gi

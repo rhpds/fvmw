@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/simulator"
@@ -70,17 +72,25 @@ func Build(cfg *Config) (*simulator.Model, error) {
 	host := object.NewHostSystem(client, hostRef)
 	log.Printf("Added host: %s", cfg.Host)
 
-	// Create datastore (local path mapped to disk path)
+	// Create datastore backed by a writable temp directory.
+	// vcsim needs to write VM metadata (.vmx files, directories) into the
+	// datastore path. The actual VMDK files are served from DiskPath
+	// (which may be a read-only PVC mount) via the ExportVm handler.
+	datastoreDir, err := os.MkdirTemp("", "fvmw-datastore-")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp datastore dir: %w", err)
+	}
+
 	datastoreSystem, err := host.ConfigManager().DatastoreSystem(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("getting datastore system: %w", err)
 	}
 
-	_, err = datastoreSystem.CreateLocalDatastore(context.Background(), cfg.Datastore, cfg.DiskPath)
+	_, err = datastoreSystem.CreateLocalDatastore(context.Background(), cfg.Datastore, datastoreDir)
 	if err != nil {
 		return nil, fmt.Errorf("creating datastore %q: %w", cfg.Datastore, err)
 	}
-	log.Printf("Created datastore: %s -> %s", cfg.Datastore, cfg.DiskPath)
+	log.Printf("Created datastore: %s -> %s (disks served from %s)", cfg.Datastore, datastoreDir, cfg.DiskPath)
 
 	// Get the resource pool for the cluster
 	pool, err := cluster.ResourcePool(context.Background())
@@ -118,9 +128,16 @@ func Build(cfg *Config) (*simulator.Model, error) {
 		vmRef := result.Result.(types.ManagedObjectReference)
 		vm := object.NewVirtualMachine(client, vmRef)
 
-		// Add a virtual disk backed by the VMDK file.
-		// Use empty FileOperation so vcsim expects the file to already exist
-		// (we serve the real VMDK from the shared disk path via ExportVm).
+		// Create a stub VMDK file in the datastore so vcsim can find it.
+		// The real VMDK is served from DiskPath via the ExportVm handler.
+		stubPath := filepath.Join(datastoreDir, vmCfg.Disk)
+		if err := os.MkdirAll(filepath.Dir(stubPath), 0755); err != nil {
+			return nil, fmt.Errorf("creating stub dir for %q: %w", vmCfg.Disk, err)
+		}
+		if err := os.WriteFile(stubPath, []byte("# fvmw stub"), 0644); err != nil {
+			return nil, fmt.Errorf("creating stub vmdk for %q: %w", vmCfg.Disk, err)
+		}
+
 		vmDiskPath := fmt.Sprintf("[%s] %s", cfg.Datastore, vmCfg.Disk)
 
 		diskSpec := types.VirtualMachineConfigSpec{
