@@ -1,0 +1,90 @@
+---
+# setup-webhook.yml - Register GitHub webhook pointing to OCP BuildConfig
+#
+# This reads the webhook URL from an existing BuildConfig and
+# registers it as a GitHub webhook on the rhpds/fvmw repo.
+#
+# Prerequisites:
+#   - BuildConfig already created (run build.yml first)
+#   - gh CLI authenticated
+#   - oc CLI authenticated
+#
+# Usage:
+#   ansible-playbook setup-webhook.yml -e @../../local.env
+
+- name: Set up GitHub webhook for fvmw BuildConfig
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    namespace: fvmw
+    github_repo: rhpds/fvmw
+
+  tasks:
+    - name: Get BuildConfig details
+      kubernetes.core.k8s_info:
+        api_version: build.openshift.io/v1
+        kind: BuildConfig
+        name: fvmw
+        namespace: "{{ namespace }}"
+      register: bc_info
+
+    - name: Fail if BuildConfig not found
+      ansible.builtin.assert:
+        that:
+          - bc_info.resources | length > 0
+        fail_msg: "BuildConfig 'fvmw' not found in namespace '{{ namespace }}'. Run build.yml first."
+
+    - name: Extract webhook secret
+      ansible.builtin.set_fact:
+        webhook_secret: >-
+          {{ (bc_info.resources[0].spec.triggers
+              | selectattr('type', 'equalto', 'GitHub')
+              | first).github.secret }}
+
+    - name: Get OCP API server URL
+      ansible.builtin.command: oc whoami --show-server
+      register: api_server
+      changed_when: false
+
+    - name: Build webhook URL
+      ansible.builtin.set_fact:
+        webhook_url: "{{ api_server.stdout }}/apis/build.openshift.io/v1/namespaces/{{ namespace }}/buildconfigs/fvmw/webhooks/{{ webhook_secret }}/github"
+
+    - name: Check for existing webhooks
+      ansible.builtin.command: >
+        gh api repos/{{ github_repo }}/hooks --jq '.[].config.url'
+      register: existing_hooks
+      changed_when: false
+
+    - name: Create GitHub webhook
+      ansible.builtin.command: >
+        gh api repos/{{ github_repo }}/hooks
+        -f "name=web"
+        -f "config[url]={{ webhook_url }}"
+        -f "config[content_type]=json"
+        -f "config[insecure_ssl]=1"
+        -f "events[]=push"
+        -f "active=true"
+      when: webhook_url not in (existing_hooks.stdout_lines | default([]))
+      register: hook_result
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: |
+          {% if hook_result is changed %}
+          GitHub webhook created successfully.
+          {% else %}
+          GitHub webhook already exists.
+          {% endif %}
+
+          Webhook URL: {{ webhook_url }}
+
+          On every push to rhpds/fvmw, OCP will automatically:
+            1. Pull the latest code
+            2. Build the container image
+            3. Push to the internal ImageStream
+
+          To use the built image in deployments, set:
+            fvmw_image: image-registry.openshift-image-registry.svc:5000/{{ namespace }}/fvmw:latest
