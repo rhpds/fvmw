@@ -30,6 +30,31 @@ var emptyChangeSetRe = regexp.MustCompile(
 	`<changeSet><name>[^<]+</name><op>assign</op></changeSet>`,
 )
 
+// untypedValueRe matches <value>...</value> elements without an xsi:type attribute.
+// These occur when vcsim serializes Go interface{} values (e.g. OptionValue.Value).
+var untypedValueRe = regexp.MustCompile(`<value>([^<]*)</value>`)
+
+func addValueType(match []byte) []byte {
+	// Extract the content
+	content := untypedValueRe.FindSubmatch(match)
+	if content == nil {
+		return match
+	}
+	val := string(content[1])
+
+	// Determine the XSD type from the value
+	xsdType := "xsd:string"
+	if val == "true" || val == "false" {
+		xsdType = "xsd:boolean"
+	} else if regexp.MustCompile(`^-?\d+$`).MatchString(val) {
+		xsdType = "xsd:int"
+	} else if regexp.MustCompile(`^-?\d+\.\d+$`).MatchString(val) {
+		xsdType = "xsd:float"
+	}
+
+	return []byte(`<value xsi:type="` + xsdType + `">` + val + `</value>`)
+}
+
 func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := &responseRecorder{
 		header: make(http.Header),
@@ -59,6 +84,11 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Fix 2: strip empty changeSets (nil values that libvirt can't parse)
 		body = emptyChangeSetRe.ReplaceAll(body, []byte{})
+
+		// Fix 3: add xsi:type to untyped <value> elements inside OptionValue.
+		// vcsim serializes Go interface{} values without xsi:type, but libvirt's
+		// ESX driver deserializes them as AnyType which requires the type attribute.
+		body = untypedValueRe.ReplaceAllFunc(body, addValueType)
 	}
 
 	for k, vals := range rec.header {
