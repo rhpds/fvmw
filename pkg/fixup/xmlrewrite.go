@@ -30,6 +30,20 @@ var emptyChangeSetRe = regexp.MustCompile(
 	`<changeSet><name>[^<]+</name><op>assign</op></changeSet>`,
 )
 
+// untypedMORRe matches ManagedObjectReference elements with type= but without xsi:type.
+// Matches: <ManagedObjectReference type="Foo">
+// Skips:   <ManagedObjectReference type="Foo" xsi:type="...">
+var untypedMORRe = regexp.MustCompile(`<ManagedObjectReference (type="[^"]*")>`)
+
+// untypedIntRe matches <int> elements without xsi:type (inside ArrayOfInt).
+var untypedIntRe = regexp.MustCompile(`<int>`)
+
+// untypedStringRe matches <string> elements without xsi:type (inside ArrayOfString).
+var untypedStringRe = regexp.MustCompile(`<string>`)
+
+// untypedBoolRe matches <boolean> elements without xsi:type.
+var untypedBoolRe = regexp.MustCompile(`<boolean>`)
+
 // untypedValueRe matches <value>...</value> elements without an xsi:type attribute.
 // These occur when vcsim serializes Go interface{} values (e.g. OptionValue.Value).
 var untypedValueRe = regexp.MustCompile(`<value>([^<]*)</value>`)
@@ -89,6 +103,19 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// vcsim serializes Go interface{} values without xsi:type, but libvirt's
 		// ESX driver deserializes them as AnyType which requires the type attribute.
 		body = untypedValueRe.ReplaceAllFunc(body, addValueType)
+
+		// Fix 4: add xsi:type to children of ArrayOf* elements.
+		// libvirt's esxVI_AnyType_DeserializeList calls esxVI_AnyType_Deserialize
+		// on each child of ArrayOf* values, which requires xsi:type.
+		// vcsim omits xsi:type on ManagedObjectReference and int children.
+		body = untypedMORRe.ReplaceAll(body,
+			[]byte(`<ManagedObjectReference $1 xsi:type="ManagedObjectReference">`))
+		body = untypedIntRe.ReplaceAll(body,
+			[]byte(`<int xsi:type="xsd:int">`))
+		body = untypedStringRe.ReplaceAll(body,
+			[]byte(`<string xsi:type="xsd:string">`))
+		body = untypedBoolRe.ReplaceAll(body,
+			[]byte(`<boolean xsi:type="xsd:boolean">`))
 	}
 
 	for k, vals := range rec.header {
