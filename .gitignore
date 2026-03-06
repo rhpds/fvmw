@@ -5,3 +5,11 @@ local.env
 *.swo
 *~
 *.vmdk
+
+# Secrets
+*.kubeconfig
+*.key
+*.pem
+*.p12
+.env
+secrets/

@@ -7,9 +7,32 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1024']
+      - id: detect-private-key
+      - id: check-merge-conflict
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
 
   - repo: https://github.com/golangci/golangci-lint
     rev: v2.10.1
     hooks:
       - id: golangci-lint
         args: ['--timeout=5m']
+
+  - repo: local
+    hooks:
+      - id: go-build
+        name: go build
+        entry: go build ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        types: [go]
