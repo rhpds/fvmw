@@ -63,6 +63,9 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("FVMW_EXTERNAL_HOST"); v != "" {
 		c.ExternalHost = v
 	}
+	if v := os.Getenv("FVMW_HOST"); v != "" {
+		c.Host = v
+	}
 	if v := os.Getenv("FVMW_USERNAME"); v != "" {
 		c.Username = v
 	}

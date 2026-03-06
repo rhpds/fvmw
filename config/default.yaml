@@ -1,5 +1,7 @@
 datacenter: "RS00"
 cluster: "vcs-rs-00"
+# Host is overridden by FVMW_HOST env var to match the route hostname.
+# libvirt's ESX driver (vpx://) connects to this host for disk transfer.
 host: "fvmw-esxi-01.example.com"
 datastore: "workload_share"
 network: "segment-migrating-to-ocpvirt"

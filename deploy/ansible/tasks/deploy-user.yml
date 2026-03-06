@@ -40,6 +40,8 @@
                         value: "/disks"
                       - name: FVMW_EXTERNAL_HOST
                         value: "vcenter-{{ fvmw_user }}.{{ cluster_domain }}"
+                      - name: FVMW_HOST
+                        value: "vcenter-{{ fvmw_user }}.{{ cluster_domain }}"
                       - name: FVMW_USER_SUFFIX
                         value: "-{{ fvmw_user }}"
                       - name: FVMW_USERNAME
