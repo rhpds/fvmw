@@ -36,8 +36,7 @@ ansible-playbook build.yml -e @../../workshop-deploy.env
 ansible-playbook workshop-setup.yml -e @../../workshop-deploy.env
 ```
 
-This downloads flat VMDKs from the disk server at
-`https://fvmw-disks.apps.ocpv-infra01.dal12.infra.demo.redhat.com/`,
+This downloads flat VMDKs from the configured disk server,
 deploys fvmw pods, and creates MTV providers for each user.
 
 ## Disk Server (Infra Cluster)
@@ -48,7 +47,7 @@ The infra cluster hosts flat VMDK files for workshop clusters to download:
 ansible-playbook disk-server.yml -e @../../local.env
 ```
 
-URL: `https://fvmw-disks.apps.ocpv-infra01.dal12.infra.demo.redhat.com/`
+URL: `https://fvmw-disks.<infra_cluster_domain>/`
 
 ## Initial Setup
 

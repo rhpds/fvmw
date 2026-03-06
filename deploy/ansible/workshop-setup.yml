@@ -34,7 +34,8 @@
 
     # Disk source: URL of the disk server hosting flat VMDKs
     # If not set, falls back to exporting from source_vcenter
-    disk_source_url: "https://fvmw-disks.apps.ocpv-infra01.dal12.infra.demo.redhat.com"
+    # URL of the disk server hosting flat VMDKs (set in workshop-deploy.env)
+    disk_source_url: ""
 
     # Fallback: export from real vCenter (slower)
     source_vcenter_url: ""
