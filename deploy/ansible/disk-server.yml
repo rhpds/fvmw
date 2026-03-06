@@ -1,0 +1,200 @@
+---
+# disk-server.yml - Deploy a VMDK disk server on the infra cluster
+#
+# Serves flat VMDK files via HTTPS for workshop clusters to download
+# during setup. Reads from the fvmw-disks PVC.
+#
+# Usage:
+#   ansible-playbook disk-server.yml -e @../../local.env
+#   ansible-playbook disk-server.yml -e @../../local.env -e disk_server_action=teardown
+
+- name: Deploy VMDK disk server
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    fvmw_namespace: fvmw
+    k8s_kubeconfig: ""
+    cluster_domain: ""
+    disk_server_action: deploy
+    fvmw_disk_pvc: fvmw-disks
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - cluster_domain | length > 0
+        fail_msg: "cluster_domain must be set."
+
+    - name: Deploy disk server
+      when: disk_server_action == 'deploy'
+      block:
+        - name: Create nginx config
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: disk-server-config
+                namespace: "{{ fvmw_namespace }}"
+              data:
+                nginx.conf: |
+                  worker_processes auto;
+                  error_log /dev/stderr;
+                  pid /tmp/nginx.pid;
+                  events { worker_connections 1024; }
+                  http {
+                    access_log /dev/stdout;
+                    client_body_temp_path /tmp/client_body;
+                    proxy_temp_path /tmp/proxy;
+                    fastcgi_temp_path /tmp/fastcgi;
+                    uwsgi_temp_path /tmp/uwsgi;
+                    scgi_temp_path /tmp/scgi;
+                    server {
+                      listen 8080;
+                      root /disks;
+                      autoindex off;
+                      location / {
+                        sendfile on;
+                        tcp_nopush on;
+                      }
+                    }
+                  }
+
+        - name: Create disk server Deployment
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: disk-server
+                namespace: "{{ fvmw_namespace }}"
+                labels:
+                  app: disk-server
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: disk-server
+                template:
+                  metadata:
+                    labels:
+                      app: disk-server
+                  spec:
+                    containers:
+                      - name: nginx
+                        image: registry.access.redhat.com/ubi9/nginx-124:latest
+                        ports:
+                          - containerPort: 8080
+                        command: ["nginx", "-g", "daemon off;", "-c", "/tmp/nginx.conf"]
+                        volumeMounts:
+                          - name: disks
+                            mountPath: /disks
+                            readOnly: true
+                          - name: config
+                            mountPath: /tmp/nginx.conf
+                            subPath: nginx.conf
+                        resources:
+                          requests:
+                            cpu: 100m
+                            memory: 128Mi
+                          limits:
+                            cpu: "1"
+                            memory: 256Mi
+                    volumes:
+                      - name: disks
+                        persistentVolumeClaim:
+                          claimName: "{{ fvmw_disk_pvc }}"
+                          readOnly: true
+                      - name: config
+                        configMap:
+                          name: disk-server-config
+
+        - name: Create disk server Service
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: disk-server
+                namespace: "{{ fvmw_namespace }}"
+              spec:
+                selector:
+                  app: disk-server
+                ports:
+                  - port: 8080
+                    targetPort: 8080
+
+        - name: Create disk server Route
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: route.openshift.io/v1
+              kind: Route
+              metadata:
+                name: disk-server
+                namespace: "{{ fvmw_namespace }}"
+              spec:
+                host: "fvmw-disks.{{ cluster_domain }}"
+                to:
+                  kind: Service
+                  name: disk-server
+                port:
+                  targetPort: 8080
+                tls:
+                  termination: edge
+                  insecureEdgeTerminationPolicy: Redirect
+
+        - name: Show disk server URL
+          ansible.builtin.debug:
+            msg: |
+              Disk server deployed.
+              URL: https://fvmw-disks.{{ cluster_domain }}/
+
+              Available files:
+                database-flat.vmdk, winweb01-flat.vmdk, winweb02-flat.vmdk, haproxy-flat.vmdk
+
+              Workshop clusters download disks during setup:
+                curl -sk https://fvmw-disks.{{ cluster_domain }}/database-flat.vmdk -o /disks/database-flat.vmdk
+
+    - name: Teardown disk server
+      when: disk_server_action == 'teardown'
+      block:
+        - name: Delete Route
+          kubernetes.core.k8s:
+            api_version: route.openshift.io/v1
+            kind: Route
+            name: disk-server
+            namespace: "{{ fvmw_namespace }}"
+            state: absent
+
+        - name: Delete Service
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Service
+            name: disk-server
+            namespace: "{{ fvmw_namespace }}"
+            state: absent
+
+        - name: Delete Deployment
+          kubernetes.core.k8s:
+            api_version: apps/v1
+            kind: Deployment
+            name: disk-server
+            namespace: "{{ fvmw_namespace }}"
+            state: absent
+
+        - name: Delete ConfigMap
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: ConfigMap
+            name: disk-server-config
+            namespace: "{{ fvmw_namespace }}"
+            state: absent
