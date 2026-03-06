@@ -1,0 +1,30 @@
+version: "2"
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - gosec
+    - ineffassign
+    - unused
+    - goconst
+    - gocyclo
+    - errcheck
+    - bodyclose
+    - unconvert
+    - unparam
+
+  settings:
+    gocyclo:
+      min-complexity: 20
+    gosec:
+      excludes:
+        - G114 # http server without timeout — we use vcsim's server
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+
+issues:
+  exclude-dirs:
+    - vendor
