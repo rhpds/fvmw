@@ -334,6 +334,7 @@ scsi0:0.deviceType = "scsi-hardDisk"
 ethernet0.present = "TRUE"
 ethernet0.virtualDev = "vmxnet3"
 ethernet0.connectionType = "bridged"
+ethernet0.networkName = "VM Network"
 `, vmName, guestID, cfg.MemoryMB, cfg.NumCPUs, cfg.Firmware, scsiType, cfg.Disk)
 }
 
