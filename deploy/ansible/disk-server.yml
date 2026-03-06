@@ -1,14 +1,23 @@
 ---
-# disk-server.yml - Deploy a VMDK disk server on the infra cluster
+# disk-server.yml - Export VMDKs from vCenter and serve them for workshops
 #
-# Serves flat VMDK files via HTTPS for workshop clusters to download
-# during setup. Reads from the fvmw-disks PVC.
+# This playbook handles the full disk pipeline:
+#   1. Creates a PVC for disk storage
+#   2. Exports VMDKs from a real vCenter via govc
+#   3. Converts streamOptimized → monolithicFlat with qemu-img
+#   4. Deploys an nginx server to serve the flat VMDKs via HTTPS
+#
+# Run once by an infra admin. Workshop clusters download from this server.
 #
 # Usage:
 #   ansible-playbook disk-server.yml -e @../../local.env
 #   ansible-playbook disk-server.yml -e @../../local.env -e disk_server_action=teardown
+#
+# Required in local.env:
+#   k8s_kubeconfig, cluster_domain, fvmw_namespace
+#   source_vcenter_url, source_vcenter_user, source_vcenter_password
 
-- name: Deploy VMDK disk server
+- name: Set up VMDK disk server
   hosts: localhost
   connection: local
   gather_facts: false
@@ -19,6 +28,23 @@
     cluster_domain: ""
     disk_server_action: deploy
     fvmw_disk_pvc: fvmw-disks
+    storage_class: ""
+
+    # Real vCenter to export VMDKs from
+    source_vcenter_url: ""
+    source_vcenter_user: "Administrator@vsphere.local"
+    source_vcenter_password: ""  # pragma: allowlist secret
+
+    # VMs to export (name used for output filenames)
+    source_vms:
+      - name: database
+        path: "/RS00/vm/Roadshow/database"
+      - name: winweb01
+        path: "/RS00/vm/Roadshow/winweb01"
+      - name: winweb02
+        path: "/RS00/vm/Roadshow/winweb02"
+      - name: haproxy
+        path: "/RS00/vm/Roadshow/haproxy-user1"
 
   environment:
     K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
@@ -28,11 +54,165 @@
       ansible.builtin.assert:
         that:
           - cluster_domain | length > 0
-        fail_msg: "cluster_domain must be set."
+          - fvmw_namespace | length > 0
+        fail_msg: "cluster_domain and fvmw_namespace must be set."
 
+    # ========================
+    #  DEPLOY
+    # ========================
     - name: Deploy disk server
       when: disk_server_action == 'deploy'
       block:
+        - name: Ensure namespace exists
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fvmw_namespace }}"
+            state: present
+
+        - name: Create disk PVC (100Gi RWX)
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: "{{ fvmw_disk_pvc }}"
+                namespace: "{{ fvmw_namespace }}"
+              spec:
+                accessModes:
+                  - ReadWriteMany
+                resources:
+                  requests:
+                    storage: 100Gi
+                storageClassName: "{{ storage_class if storage_class else omit }}"
+
+        # --- Export and convert VMDKs ---
+        - name: Create disk preparation pod
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: disk-prep
+                namespace: "{{ fvmw_namespace }}"
+              spec:
+                containers:
+                  - name: prep
+                    image: quay.io/fedora/fedora:latest
+                    command: ["sleep", "infinity"]
+                    volumeMounts:
+                      - name: disks
+                        mountPath: /disks
+                    resources:
+                      requests:
+                        cpu: "2"
+                        memory: 2Gi
+                      limits:
+                        cpu: "4"
+                        memory: 4Gi
+                volumes:
+                  - name: disks
+                    persistentVolumeClaim:
+                      claimName: "{{ fvmw_disk_pvc }}"
+
+        - name: Wait for disk-prep pod
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: disk-prep
+            namespace: "{{ fvmw_namespace }}"
+          register: prep_pod
+          until: prep_pod.resources | length > 0 and prep_pod.resources[0].status.phase == 'Running'
+          retries: 12
+          delay: 10
+
+        - name: Install govc and qemu-img
+          kubernetes.core.k8s_exec:
+            namespace: "{{ fvmw_namespace }}"
+            pod: disk-prep
+            command: >
+              bash -c "
+              dnf install -y qemu-img 2>&1 | tail -1
+              curl -sL https://github.com/vmware/govmomi/releases/latest/download/govc_Linux_x86_64.tar.gz | tar xzf - -C /usr/local/bin govc
+              govc version
+              "
+          register: install_result
+
+        - name: Show install result
+          ansible.builtin.debug:
+            msg: "{{ install_result.stdout_lines | default([]) }}"
+
+        - name: Export and convert each VM disk
+          loop: "{{ source_vms }}"
+          loop_control:
+            loop_var: vm
+            label: "{{ vm.name }}"
+          kubernetes.core.k8s_exec:
+            namespace: "{{ fvmw_namespace }}"
+            pod: disk-prep
+            command: >
+              bash -c "
+              if [ -f /disks/{{ vm.name }}-flat.vmdk ]; then
+                echo '{{ vm.name }}-flat.vmdk already exists, skipping'
+                ls -lh /disks/{{ vm.name }}-flat.vmdk
+                exit 0
+              fi
+
+              export GOVC_URL='{{ source_vcenter_url }}'
+              export GOVC_USERNAME='{{ source_vcenter_user }}'
+              export GOVC_PASSWORD='{{ source_vcenter_password }}'
+              export GOVC_INSECURE=1
+
+              echo 'Exporting {{ vm.name }} from {{ vm.path }}...'
+              mkdir -p /tmp/export/{{ vm.name }}
+              govc export.ovf -vm '{{ vm.path }}' /tmp/export/{{ vm.name }}/ || exit 1
+
+              SRC=$(find /tmp/export/{{ vm.name }} -name '*.vmdk' -type f | head -1)
+              if [ -z \"$SRC\" ]; then
+                echo 'ERROR: No VMDK found in export'
+                exit 1
+              fi
+
+              echo 'Converting to flat format...'
+              qemu-img convert -p -O vmdk -o subformat=monolithicFlat \"$SRC\" /disks/{{ vm.name }}-flat.vmdk || exit 1
+              echo '# stub' > /disks/{{ vm.name }}.vmdk
+              rm -rf /tmp/export/{{ vm.name }}
+              echo 'Done:'
+              ls -lh /disks/{{ vm.name }}*
+              "
+          register: export_result
+          when: source_vcenter_url | length > 0
+
+        - name: Show export results
+          when: export_result is defined and export_result.results is defined
+          ansible.builtin.debug:
+            msg: "{{ item.stdout_lines | default([]) }}"
+          loop: "{{ export_result.results }}"
+          loop_control:
+            label: "{{ item.vm.name | default('?') }}"
+
+        - name: Show final disk inventory
+          kubernetes.core.k8s_exec:
+            namespace: "{{ fvmw_namespace }}"
+            pod: disk-prep
+            command: bash -c "ls -lh /disks/ && df -h /disks | tail -1"
+          register: disk_list
+
+        - name: Disk inventory
+          ansible.builtin.debug:
+            msg: "{{ disk_list.stdout_lines | default([]) }}"
+
+        - name: Delete disk-prep pod
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Pod
+            name: disk-prep
+            namespace: "{{ fvmw_namespace }}"
+            state: absent
+
+        # --- Deploy nginx disk server ---
         - name: Create nginx config
           kubernetes.core.k8s:
             state: present
@@ -152,18 +332,19 @@
                   termination: edge
                   insecureEdgeTerminationPolicy: Redirect
 
-        - name: Show disk server URL
+        - name: Disk server ready
           ansible.builtin.debug:
             msg: |
               Disk server deployed.
+
               URL: https://fvmw-disks.{{ cluster_domain }}/
 
-              Available files:
-                database-flat.vmdk, winweb01-flat.vmdk, winweb02-flat.vmdk, haproxy-flat.vmdk
+              Workshop clusters should set in workshop-deploy.env:
+                disk_source_url: https://fvmw-disks.{{ cluster_domain }}
 
-              Workshop clusters download disks during setup:
-                curl -sk https://fvmw-disks.{{ cluster_domain }}/database-flat.vmdk -o /disks/database-flat.vmdk
-
+    # ========================
+    #  TEARDOWN
+    # ========================
     - name: Teardown disk server
       when: disk_server_action == 'teardown'
       block:
