@@ -3,23 +3,32 @@ package fixup
 import (
 	"bytes"
 	"net/http"
+	"regexp"
 )
 
-// XMLRewriter wraps an http.Handler and fixes the XML namespace prefix
-// that govmomi's encoder generates. It replaces _XMLSchema-instance with xsi
-// in SOAP responses so libvirt's ESX driver can parse them.
+// XMLRewriter wraps an http.Handler and fixes XML compatibility issues
+// between govmomi's vcsim and libvirt's ESX driver (used by virt-v2v).
 //
-// govmomi's vim25/xml encoder generates:
+// Fixes applied:
 //
-//	xmlns:_XMLSchema-instance="http://www.w3.org/2001/XMLSchema-instance"
-//	_XMLSchema-instance:type="xsd:string"
+//  1. Namespace prefix: govmomi generates _XMLSchema-instance: instead of xsi:
+//     for the XML Schema Instance namespace. Libvirt's xmlGetNsProp resolves
+//     by URI so this shouldn't matter, but we fix it for safety.
 //
-// but libvirt expects the standard xsi prefix:
-//
-//	xsi:type="xsd:string"
+//  2. Empty changeSets: vcsim returns <changeSet> with op=assign but no <val>
+//     for nil Go values (e.g. cpuHotAddEnabled=nil). Libvirt tries to
+//     deserialize the missing value as AnyType and fails with
+//     "AnyType is missing 'type' property". We strip these empty changeSets.
 type XMLRewriter struct {
 	Handler http.Handler
 }
+
+// emptyChangeSetRe matches changeSet elements that have op=assign but no <val>.
+// These are nil values in vcsim that libvirt can't parse.
+// Example: <changeSet><name>config.cpuHotAddEnabled</name><op>assign</op></changeSet>
+var emptyChangeSetRe = regexp.MustCompile(
+	`<changeSet><name>[^<]+</name><op>assign</op></changeSet>`,
+)
 
 func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := &responseRecorder{
@@ -35,6 +44,7 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only rewrite XML/SOAP responses, not binary disk data
 	ct := rec.header.Get("Content-Type")
 	if len(body) > 0 && (ct == "" || ct == "text/xml" || ct == "text/xml; charset=utf-8" || ct == "application/xml") {
+		// Fix 1: namespace prefix
 		body = bytes.ReplaceAll(body,
 			[]byte(`xmlns:_XMLSchema-instance="http://www.w3.org/2001/XMLSchema-instance"`),
 			[]byte{})
@@ -44,6 +54,9 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = bytes.ReplaceAll(body,
 			[]byte(`_XMLSchema-instance:nil=`),
 			[]byte(`xsi:nil=`))
+
+		// Fix 2: strip empty changeSets (nil values that libvirt can't parse)
+		body = emptyChangeSetRe.ReplaceAll(body, []byte{})
 	}
 
 	for k, vals := range rec.header {
