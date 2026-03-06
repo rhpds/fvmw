@@ -209,6 +209,7 @@ func Build(cfg *Config) (*simulator.Model, error) {
 									FileName: vmDiskPath,
 								},
 								DiskMode: string(types.VirtualDiskModePersistent),
+								Sharing:  string(types.VirtualDiskSharingSharingNone),
 							},
 						},
 						CapacityInBytes: diskCapacityBytes(vmCfg.DiskSizeGB),
