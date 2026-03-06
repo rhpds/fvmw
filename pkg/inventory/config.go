@@ -34,6 +34,7 @@ type Config struct {
 	Username     string `yaml:"-"`
 	Password     string `yaml:"-"`
 	UserSuffix   string `yaml:"-"` // appended to VM names (e.g. "-user1")
+	ESXMode      bool   `yaml:"-"` // use ESX (HostAgent) model instead of VPX
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -74,6 +75,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("FVMW_USER_SUFFIX"); v != "" {
 		c.UserSuffix = v
+	}
+	if os.Getenv("FVMW_ESX_MODE") != "" {
+		c.ESXMode = true
 	}
 }
 
