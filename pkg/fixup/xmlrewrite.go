@@ -30,19 +30,62 @@ var emptyChangeSetRe = regexp.MustCompile(
 	`<changeSet><name>[^<]+</name><op>assign</op></changeSet>`,
 )
 
-// untypedMORRe matches ManagedObjectReference elements with type= but without xsi:type.
-// Matches: <ManagedObjectReference type="Foo">
-// Skips:   <ManagedObjectReference type="Foo" xsi:type="...">
-var untypedMORRe = regexp.MustCompile(`<ManagedObjectReference (type="[^"]*")>`)
+// arrayOfRe finds ArrayOf* type declarations and their content.
+// It captures the element type name from the ArrayOf prefix.
+var arrayOfRe = regexp.MustCompile(`xsi:type="ArrayOf(\w+)"`)
 
-// untypedIntRe matches <int> elements without xsi:type (inside ArrayOfInt).
-var untypedIntRe = regexp.MustCompile(`<int>`)
+// xsdPrimitives maps XML element names to their XSD types for ArrayOf children.
+var xsdPrimitives = map[string]string{
+	"int":     "xsd:int",
+	"long":    "xsd:long",
+	"short":   "xsd:short",
+	"string":  "xsd:string",
+	"boolean": "xsd:boolean",
+	"float":   "xsd:float",
+	"double":  "xsd:double",
+	"byte":    "xsd:byte",
+}
 
-// untypedStringRe matches <string> elements without xsi:type (inside ArrayOfString).
-var untypedStringRe = regexp.MustCompile(`<string>`)
+// addArrayOfChildTypes finds ArrayOf* elements and adds xsi:type to their children.
+// For ArrayOfFoo, each <Foo> child gets xsi:type="Foo".
+// For ArrayOfManagedObjectReference, each <ManagedObjectReference> gets xsi:type="ManagedObjectReference".
+func addArrayOfChildTypes(body []byte) []byte {
+	// Find all ArrayOf* type names used in the response
+	matches := arrayOfRe.FindAllSubmatch(body, -1)
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		childType := string(m[1])
+		if seen[childType] {
+			continue
+		}
+		seen[childType] = true
 
-// untypedBoolRe matches <boolean> elements without xsi:type.
-var untypedBoolRe = regexp.MustCompile(`<boolean>`)
+		xsiType := childType
+		if t, ok := xsdPrimitives[childType]; ok {
+			// Primitive: <int> → xsi:type="xsd:int"
+			xsiType = t
+		}
+
+		// For ManagedObjectReference, it has a type= attribute already
+		if childType == "ManagedObjectReference" {
+			// <ManagedObjectReference type="Foo"> → <ManagedObjectReference type="Foo" xsi:type="ManagedObjectReference">
+			old := []byte(`<ManagedObjectReference type=`)
+			new := []byte(`<ManagedObjectReference xsi:type="ManagedObjectReference" type=`)
+			// Only replace ones that don't already have xsi:type
+			if !bytes.Contains(body, []byte(`<ManagedObjectReference xsi:type=`)) {
+				body = bytes.ReplaceAll(body, old, new)
+			}
+			continue
+		}
+
+		// For other types: <Foo> → <Foo xsi:type="Foo">
+		// Only add if the element doesn't already have xsi:type
+		old := []byte("<" + childType + ">")
+		new := []byte("<" + childType + ` xsi:type="` + xsiType + `">`)
+		body = bytes.ReplaceAll(body, old, new)
+	}
+	return body
+}
 
 // untypedValueRe matches <value>...</value> elements without an xsi:type attribute.
 // These occur when vcsim serializes Go interface{} values (e.g. OptionValue.Value).
@@ -107,15 +150,8 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Fix 4: add xsi:type to children of ArrayOf* elements.
 		// libvirt's esxVI_AnyType_DeserializeList calls esxVI_AnyType_Deserialize
 		// on each child of ArrayOf* values, which requires xsi:type.
-		// vcsim omits xsi:type on ManagedObjectReference and int children.
-		body = untypedMORRe.ReplaceAll(body,
-			[]byte(`<ManagedObjectReference $1 xsi:type="ManagedObjectReference">`))
-		body = untypedIntRe.ReplaceAll(body,
-			[]byte(`<int xsi:type="xsd:int">`))
-		body = untypedStringRe.ReplaceAll(body,
-			[]byte(`<string xsi:type="xsd:string">`))
-		body = untypedBoolRe.ReplaceAll(body,
-			[]byte(`<boolean xsi:type="xsd:boolean">`))
+		// vcsim omits xsi:type on ALL children inside ArrayOf* containers.
+		body = addArrayOfChildTypes(body)
 
 		// Fix 5: ESXi mode — when the request comes in on the ESXi hostname
 		// (esxi-vcenter-<user>), rewrite apiType from VirtualCenter to HostAgent.
