@@ -161,12 +161,14 @@ func Build(cfg *Config) (*simulator.Model, error) {
 
 		vmDiskPath := fmt.Sprintf("[%s] %s", cfg.Datastore, vmCfg.Disk)
 
+		unitNumber := int32(0)
 		diskSpec := types.VirtualMachineConfigSpec{
 			DeviceChange: []types.BaseVirtualDeviceConfigSpec{
 				&types.VirtualDeviceConfigSpec{
 					Operation: types.VirtualDeviceConfigSpecOperationAdd,
 					Device: &types.VirtualDisk{
 						VirtualDevice: types.VirtualDevice{
+							UnitNumber: &unitNumber,
 							Backing: &types.VirtualDiskFlatVer2BackingInfo{
 								VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
 									FileName: vmDiskPath,
