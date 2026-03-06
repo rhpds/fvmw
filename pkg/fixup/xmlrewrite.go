@@ -25,6 +25,7 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := &responseRecorder{
 		header: make(http.Header),
 		body:   &bytes.Buffer{},
+		code:   http.StatusOK,
 	}
 
 	rw.Handler.ServeHTTP(rec, r)
