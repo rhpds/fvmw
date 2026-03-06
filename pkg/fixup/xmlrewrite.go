@@ -2,6 +2,7 @@ package fixup
 
 import (
 	"bytes"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -122,6 +123,7 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// to the ESXi host (HostAgent). Both go to our fvmw, so we distinguish
 		// by hostname prefix.
 		if rw.ESXiPrefix != "" && strings.HasPrefix(r.Host, rw.ESXiPrefix) {
+			log.Println("ESXi mode: rewriting apiType to HostAgent")
 			body = bytes.ReplaceAll(body,
 				[]byte(`<apiType>VirtualCenter</apiType>`),
 				[]byte(`<apiType>HostAgent</apiType>`))

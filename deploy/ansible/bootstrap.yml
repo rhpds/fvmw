@@ -61,7 +61,7 @@
               resources: ["deployments"]
               verbs: ["get", "list", "create", "update", "patch", "delete"]
             - apiGroups: ["route.openshift.io"]
-              resources: ["routes"]
+              resources: ["routes", "routes/custom-host"]
               verbs: ["get", "list", "create", "update", "patch", "delete"]
             - apiGroups: ["build.openshift.io"]
               resources: ["buildconfigs", "builds", "buildconfigs/instantiate"]
