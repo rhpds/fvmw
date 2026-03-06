@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/simulator"
@@ -229,9 +230,18 @@ func createVMs(cfg *Config, client *vim25.Client, vmFolder *object.Folder, pool 
 		if err := os.MkdirAll(filepath.Dir(stubPath), 0755); err != nil {
 			return fmt.Errorf("creating stub dir for %q: %w", vmCfg.Disk, err)
 		}
-		if err := os.WriteFile(stubPath, []byte("# fvmw stub"), 0644); err != nil {
-			return fmt.Errorf("creating stub vmdk for %q: %w", vmCfg.Disk, err)
+		if writeErr := os.WriteFile(stubPath, []byte("# fvmw stub"), 0600); writeErr != nil {
+			return fmt.Errorf("creating stub vmdk for %q: %w", vmCfg.Disk, writeErr)
 		}
+
+		// Create a -flat.vmdk symlink pointing to the actual VMDK in DiskPath.
+		// virt-v2v downloads the flat backing file via the /folder/ endpoint.
+		// The filename in the VMX is "database.vmdk" and virt-v2v looks for
+		// "database-flat.vmdk" at the same datastore path.
+		flatName := strings.TrimSuffix(vmCfg.Disk, ".vmdk") + "-flat.vmdk"
+		flatPath := filepath.Join(datastoreDir, vmName, flatName)
+		realDisk := filepath.Join(cfg.DiskPath, vmCfg.Disk)
+		_ = os.Symlink(realDisk, flatPath) // best effort
 
 		vmDiskPath := fmt.Sprintf("[%s] %s", cfg.Datastore, vmCfg.Disk)
 
