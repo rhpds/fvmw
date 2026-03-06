@@ -1,6 +1,6 @@
 # FVMW Ansible Deployment
 
-Ansible playbooks to deploy and manage fvmw instances on OpenShift.
+Ansible playbooks to deploy fvmw (Fake VMware) for MTV migration demos.
 
 ## Prerequisites
 
@@ -8,196 +8,132 @@ Ansible playbooks to deploy and manage fvmw instances on OpenShift.
   ```bash
   ansible-galaxy collection install kubernetes.core
   ```
-- `oc` CLI (for initial bootstrap only)
+- A disk server hosting flat VMDK images (see Step 1 below)
+- Workshop cluster with MTV and OpenShift Virtualization installed
 
 ## Playbooks
 
-| Playbook | Purpose | Requires |
-|----------|---------|----------|
-| `workshop-setup.yml` | **Full workshop setup** (build, disks, pods, MTV) | cluster-admin kubeconfig |
-| `bootstrap.yml` | One-time namespace, SA, RBAC, kubeconfig setup | cluster-admin |
-| `build.yml` | BuildConfig, ImageStream, GitHub webhook | SA kubeconfig |
-| `deploy.yml` | Per-user VPX + ESXi pods, services, routes | SA kubeconfig |
-| `disk-server.yml` | VMDK disk server on infra cluster | cluster-admin on infra cluster |
-| `setup-webhook.yml` | Register GitHub webhook via API | SA kubeconfig + github_token |
+| Playbook | Purpose | Target | Requires |
+|----------|---------|--------|----------|
+| `disk-server.yml` | Host VMDK images for workshops | Infra cluster | cluster-admin |
+| `workshop-setup.yml` | **Full workshop setup** | Workshop cluster | cluster-admin |
+| `bootstrap.yml` | SA, RBAC, kubeconfig (manual ops) | Any cluster | cluster-admin |
+| `build.yml` | BuildConfig, ImageStream | Any cluster | SA kubeconfig |
+| `deploy.yml` | Per-user pods, services, routes | Any cluster | SA kubeconfig |
+| `setup-webhook.yml` | GitHub webhook for auto-builds | Any cluster | SA kubeconfig + github_token |
 
-## Quick Start (Workshop)
+---
 
-For workshop environments, `workshop-setup.yml` is the **only playbook you need**.
-It handles everything: build, disk download, pod deployment, and MTV configuration.
+## Step 1: Disk Server (Infra Admin, One-Time)
+
+The disk server hosts flat VMDK images that workshop clusters download.
+Run this once on a persistent infra cluster.
+
+**Prerequisites:** A PVC with flat VMDK files (`*-flat.vmdk`). See the
+main [README](../../README.md#disk-preparation) for how to export from
+a real vCenter and convert to flat format.
+
+```bash
+cp ../../local.env.example ../../local.env
+vi ../../local.env  # Set infra cluster kubeconfig and domain
+
+ansible-playbook disk-server.yml -e @../../local.env
+```
+
+This creates an nginx pod serving files from the PVC via HTTPS.
+Note the URL — workshop clusters need it in their config.
+
+---
+
+## Step 2: Workshop Setup (Per Workshop)
+
+`workshop-setup.yml` is the **only playbook needed** for each workshop.
+It does everything: build, disk download, pods, and MTV configuration.
 
 ```bash
 cp ../../workshop-deploy.env.example ../../workshop-deploy.env
 vi ../../workshop-deploy.env
+# Set: k8s_kubeconfig, cluster_domain, fvmw_password, fvmw_users, disk_source_url
 
 cd deploy/ansible
 ansible-playbook workshop-setup.yml -e @../../workshop-deploy.env
 ```
 
 This single command:
-1. Builds the fvmw container image from GitHub
-2. Creates the shared PVC and downloads flat VMDKs from the disk server
+1. Builds the fvmw container image from the GitHub repo
+2. Creates the shared 100Gi PVC and downloads flat VMDKs from the disk server
 3. Deploys vcenter + esxi pod pairs per user
-4. Creates MTV providers, network/storage mappings, and target namespaces
+4. Creates MTV providers, network/storage mappings, and target namespaces per user
 
-The other playbooks (`bootstrap.yml`, `build.yml`, `deploy.yml`) are for
-individual operations when you need more control.
+After completion, students can follow the
+[roadshow migration instructions](https://rhpds.github.io/openshift-virt-roadshow-cnv-multi-user/modules/module-02-mtv.html).
 
-## Disk Server (Infra Admin, One-Time)
-
-The disk server is a one-time deployment on the infra cluster. It hosts flat
-VMDK files that workshop clusters download during setup.
-
-```bash
-# Run once by an infra admin with cluster-admin on the infra cluster
-ansible-playbook disk-server.yml -e @../../local.env
-```
-
-This creates an nginx pod that serves the flat VMDKs from the infra cluster's
-PVC via HTTPS at `https://fvmw-disks.<infra_cluster_domain>/`.
-
-Workshop clusters reference this URL in `workshop-deploy.env`:
-```yaml
-disk_source_url: https://fvmw-disks.<infra_cluster_domain>
-```
-
-## Initial Setup
-
-```bash
-# From the repo root:
-cp local.env.example local.env
-vi local.env  # Set cluster_domain, fvmw_users, fvmw_password, etc.
-```
-
-### `local.env` variables
+### `workshop-deploy.env` variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `k8s_kubeconfig` | Yes (after bootstrap) | Path to SA kubeconfig |
-| `cluster_domain` | Yes | OCP apps domain (e.g. `apps.cluster.example.com`) |
-| `fvmw_namespace` | No (default: `fvmw`) | Target namespace |
-| `fvmw_image` | No | Container image (default: internal ImageStream) |
+| `k8s_kubeconfig` | Yes | Kubeconfig with cluster-admin access |
+| `cluster_domain` | Yes | Workshop cluster apps domain |
 | `fvmw_password` | Yes | vSphere password for all instances |
 | `fvmw_users` | Yes | List of user IDs to provision |
-| `github_token` | For build/webhook | GitHub token for private repo access |
-| `storage_class` | No | PVC storage class (default: `ocs-storagecluster-cephfs`) |
+| `disk_source_url` | Yes | URL of the disk server from Step 1 |
+| `github_token` | If private repo | GitHub token for repo access |
+| `storage_class` | No | PVC storage class (default: CephFS) |
+| `fvmw_namespace` | No | Namespace (default: `fvmw`) |
 
-## Step 1: Bootstrap (one-time, cluster-admin)
+---
+
+## Individual Playbooks
+
+The following playbooks are for manual operations when you need more control.
+
+### Bootstrap (SA + RBAC)
 
 ```bash
 oc login <cluster>
-cd deploy/ansible
 ansible-playbook bootstrap.yml -e @../../local.env
 ```
 
-Creates:
-- `fvmw` namespace
-- `fvmw-mgmt` ServiceAccount with minimal ClusterRole (incl `routes/custom-host`)
-- Long-lived token and kubeconfig at `~/secrets/fvmw-mgmt.kubeconfig`
+Creates a `fvmw-mgmt` ServiceAccount with minimal ClusterRole and generates
+a kubeconfig at `~/secrets/fvmw-mgmt.kubeconfig`.
 
-Add to `local.env`:
-```yaml
-k8s_kubeconfig: ~/secrets/fvmw-mgmt.kubeconfig
-```
-
-## Step 2: Build Pipeline
+### Build
 
 ```bash
 ansible-playbook build.yml -e @../../local.env
 ```
 
-Creates:
-- `fvmw` ImageStream
-- `fvmw` BuildConfig (Docker strategy from GitHub repo)
-- Source secret for private repo access (if `github_token` set)
-- Triggers initial build via ConfigChange
+Creates BuildConfig + ImageStream. Triggers initial build from GitHub.
 
-## Step 3: Prepare Disk Images (one-time)
-
-VMDK images must be on the PVC in **monolithicFlat** format for virt-v2v to download.
-
-```bash
-# Export from real vCenter
-govc export.ovf -vm /DC/vm/database /tmp/export/
-
-# Upload to PVC via helper pod
-oc run disk-loader --rm -i --image=registry.access.redhat.com/ubi9 \
-  --overrides='{"spec":{"containers":[{"name":"loader","image":"registry.access.redhat.com/ubi9","stdin":true,"volumeMounts":[{"name":"disks","mountPath":"/disks"}]}],"volumes":[{"name":"disks","persistentVolumeClaim":{"claimName":"fvmw-disks"}}]}}' \
-  -- bash
-
-# Inside the pod, convert to flat:
-dnf install -y qemu-img
-qemu-img convert -O vmdk -o subformat=monolithicFlat database.vmdk database-flat.vmdk
-```
-
-Required files on PVC for each VM:
-- `<name>.vmdk` — streamOptimized (original export)
-- `<name>-flat.vmdk` — monolithicFlat (for virt-v2v download)
-
-## Step 4: Deploy Users
+### Deploy
 
 ```bash
 ansible-playbook deploy.yml -e @../../local.env
 ```
 
-Creates for each user in `fvmw_users`:
+Deploys per-user VPX + ESXi pods, services, routes, shared PVC, credentials.
 
-**VPX pod (vCenter):**
-- `vcenter-<user>` Deployment (VPX mode, `FVMW_HOST=esxi-<user>.<domain>`)
-- `vcenter-<user>` Service + Route (edge TLS)
-
-**ESXi pod:**
-- `esxi-<user>` Deployment (ESX mode, `FVMW_ESX_MODE=1`)
-- `esxi-<user>` Service + Route (edge TLS)
-
-**Shared resources:**
-- `fvmw-disks` PVC (ReadWriteMany, 100Gi, CephFS)
-- `fvmw-credentials` Secret
-
-## Update / Redeploy
-
-Running any playbook again is idempotent.
-
-```bash
-# Trigger a rebuild (picks up latest code from GitHub)
-oc start-build fvmw -n fvmw
-
-# Restart pods to pick up new image
-oc rollout restart deployment/vcenter-user1 deployment/esxi-user1 -n fvmw
-```
-
-## Teardown
+### Teardown
 
 ```bash
 ansible-playbook deploy.yml -e @../../local.env -e fvmw_action=teardown
 ```
 
-## GitHub Webhook (optional)
+---
 
-```bash
-ansible-playbook setup-webhook.yml -e @../../local.env
-```
+## MTV Provider (created by workshop-setup)
 
-Requires `github_token` with `admin:repo_hook` scope.
-
-## MTV Provider Setup
-
-After deployment, create an MTV VMware Provider on the target cluster:
+Each user gets a pre-configured VMware provider:
 
 - **URL:** `https://vcenter-<user>.<cluster_domain>/sdk`
 - **Username:** `administrator@vsphere.local`
-- **Password:** (value from `fvmw_password` in local.env)
-- **VDDK init image:** leave empty (not needed)
-- **SDK endpoint:** `vcenter`
-
-The provider inventory will show datacenter `RS00` with 4 VMs in the `Roadshow` folder.
+- **Password:** (from `fvmw_password`)
+- **Inventory:** Datacenter `RS00`, folder `Roadshow`, 4 VMs per user
 
 ### Migration Plan
-
-Follow the [roadshow demo instructions](https://rhpds.github.io/openshift-virt-roadshow-cnv-multi-user/modules/module-02-mtv.html):
 
 1. Select VMs: `database-<user>`, `winweb01-<user>`, `winweb02-<user>`
 2. Target namespace: `vmexamples-<user>`
 3. Network map: Pod Networking
 4. Storage map: `ocs-external-storagecluster-ceph-rbd`
-5. Start migration — virt-v2v downloads disks, converts, and creates KubeVirt VMs
+5. Start migration
