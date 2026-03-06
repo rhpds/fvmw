@@ -9,16 +9,46 @@ Ansible playbooks to deploy and manage fvmw instances on OpenShift.
   ansible-galaxy collection install kubernetes.core
   ```
 - `oc` CLI (for initial bootstrap only)
-- VMDK disk images in monolithicFlat format on the shared PVC
 
 ## Playbooks
 
 | Playbook | Purpose | Requires |
 |----------|---------|----------|
+| `workshop-setup.yml` | **Full workshop setup** (build, disks, pods, MTV) | cluster-admin kubeconfig |
 | `bootstrap.yml` | One-time namespace, SA, RBAC, kubeconfig setup | cluster-admin |
 | `build.yml` | BuildConfig, ImageStream, GitHub webhook | SA kubeconfig |
 | `deploy.yml` | Per-user VPX + ESXi pods, services, routes | SA kubeconfig |
+| `disk-server.yml` | VMDK disk server on infra cluster | SA kubeconfig |
 | `setup-webhook.yml` | Register GitHub webhook via API | SA kubeconfig + github_token |
+
+## Quick Start (Workshop)
+
+For workshop environments, use the all-in-one setup:
+
+```bash
+cp ../../workshop-deploy.env.example ../../workshop-deploy.env
+vi ../../workshop-deploy.env
+
+# Build fvmw image first
+ansible-playbook build.yml -e @../../workshop-deploy.env
+
+# Then run full setup (PVC, disks, pods, MTV providers)
+ansible-playbook workshop-setup.yml -e @../../workshop-deploy.env
+```
+
+This downloads flat VMDKs from the disk server at
+`https://fvmw-disks.apps.ocpv-infra01.dal12.infra.demo.redhat.com/`,
+deploys fvmw pods, and creates MTV providers for each user.
+
+## Disk Server (Infra Cluster)
+
+The infra cluster hosts flat VMDK files for workshop clusters to download:
+
+```bash
+ansible-playbook disk-server.yml -e @../../local.env
+```
+
+URL: `https://fvmw-disks.apps.ocpv-infra01.dal12.infra.demo.redhat.com/`
 
 ## Initial Setup
 
