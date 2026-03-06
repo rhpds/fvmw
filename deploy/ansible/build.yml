@@ -3,8 +3,9 @@
 #
 # This creates:
 #   - ImageStream for fvmw
+#   - Source secret for private GitHub repo (if github_token is set)
 #   - BuildConfig with GitHub webhook trigger
-#   - Prints the webhook URL to configure in GitHub
+#   - Triggers initial build
 #
 # Usage:
 #   ansible-playbook build.yml -e @../../local.env
@@ -17,8 +18,10 @@
   vars:
     namespace: fvmw
     fvmw_image_stream: fvmw
-    github_repo: https://github.com/rhpds/fvmw.git
+    github_repo_url: https://github.com/rhpds/fvmw.git
+    github_repo: rhpds/fvmw
     github_ref: main
+    github_token: ""
     webhook_secret: "{{ lookup('password', '/dev/null chars=ascii_lowercase,digits length=32') }}"
 
   tasks:
@@ -33,6 +36,22 @@
         kind: Namespace
         name: "{{ namespace }}"
         state: present
+
+    - name: Create source secret for private GitHub repo
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: github-source-secret
+            namespace: "{{ namespace }}"
+            annotations:
+              build.openshift.io/source-secret-match-uri-1: "https://github.com/rhpds/*"
+          type: kubernetes.io/basic-auth
+          stringData:
+            password: "{{ github_token }}"
+      when: github_token | length > 0
 
     - name: Create ImageStream
       kubernetes.core.k8s:
@@ -61,8 +80,9 @@
             source:
               type: Git
               git:
-                uri: "{{ github_repo }}"
+                uri: "{{ github_repo_url }}"
                 ref: "{{ github_ref }}"
+              sourceSecret: "{{ {'name': 'github-source-secret'} if github_token | length > 0 else omit }}"
             strategy:
               type: Docker
               dockerStrategy:
@@ -77,7 +97,7 @@
                   secret: "{{ webhook_secret }}"
               - type: ConfigChange
 
-    - name: Get webhook URL
+    - name: Get BuildConfig webhook secret
       kubernetes.core.k8s_info:
         api_version: build.openshift.io/v1
         kind: BuildConfig
@@ -85,10 +105,20 @@
         namespace: "{{ namespace }}"
       register: bc_info
 
-    - name: Get cluster API server URL
-      ansible.builtin.command: oc whoami --show-server
-      register: api_server
-      changed_when: false
+    - name: Extract webhook secret from BuildConfig
+      ansible.builtin.set_fact:
+        actual_webhook_secret: >-
+          {{ (bc_info.resources[0].spec.triggers
+              | selectattr('type', 'equalto', 'GitHub')
+              | first).github.secret }}
+
+    - name: Get cluster API URL from kubeconfig
+      kubernetes.core.k8s_cluster_info:
+      register: cluster_info
+
+    - name: Build webhook URL
+      ansible.builtin.set_fact:
+        webhook_url: "{{ cluster_info.connection.host }}/apis/build.openshift.io/v1/namespaces/{{ namespace }}/buildconfigs/fvmw/webhooks/{{ actual_webhook_secret }}/github"
 
     - name: Display webhook configuration
       ansible.builtin.debug:
@@ -96,24 +126,31 @@
           BuildConfig created successfully.
 
           GitHub Webhook URL:
-            {{ api_server.stdout }}/apis/build.openshift.io/v1/namespaces/{{ namespace }}/buildconfigs/fvmw/webhooks/{{ webhook_secret }}/github
+            {{ webhook_url }}
 
           To configure in GitHub:
-            1. Go to https://github.com/rhpds/fvmw/settings/hooks
+            1. Go to https://github.com/{{ github_repo }}/settings/hooks
             2. Click "Add webhook"
             3. Paste the URL above
             4. Content type: application/json
             5. Secret: (leave blank - secret is in the URL)
-            6. Events: Just the push event
+            6. SSL verification: disable (for self-signed API certs)
+            7. Events: Just the push event
 
           To trigger a build manually:
             oc start-build fvmw -n {{ namespace }} --follow
 
     - name: Start initial build
-      ansible.builtin.command: "oc start-build fvmw -n {{ namespace }}"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: build.openshift.io/v1
+          kind: BuildRequest
+          metadata:
+            name: fvmw
+            namespace: "{{ namespace }}"
       register: build_result
-      changed_when: "'started' in build_result.stdout"
 
-    - name: Show build status
+    - name: Show build started
       ansible.builtin.debug:
-        msg: "{{ build_result.stdout }}"
+        msg: "Build triggered. Monitor with: oc logs -f buildconfig/fvmw -n {{ namespace }}"
