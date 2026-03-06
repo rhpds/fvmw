@@ -1,0 +1,111 @@
+---
+# deploy.yml - Deploy/update fvmw instances on OpenShift
+#
+# Usage:
+#   ansible-playbook deploy.yml -e @../../local.env
+#   ansible-playbook deploy.yml -e @../../local.env -e fvmw_action=teardown
+#
+# Required variables (set in local.env):
+#   cluster_domain: apps.cluster.example.com
+#   namespace: fvmw
+#   fvmw_image: quay.io/rhpds/fvmw:latest
+#   fvmw_password: changeme
+#   fvmw_users: [user1, user2]
+
+- name: Deploy fvmw to OpenShift
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    fvmw_action: deploy
+    namespace: fvmw
+    fvmw_image: quay.io/rhpds/fvmw:latest
+    fvmw_password: password
+    fvmw_username: administrator@vsphere.local
+    fvmw_users: []
+    cluster_domain: ""
+    storage_class: ""
+    fvmw_disk_pvc: fvmw-disks
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - cluster_domain | length > 0
+          - fvmw_users | length > 0
+        fail_msg: "cluster_domain and fvmw_users must be set. See local.env.example."
+
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace }}"
+        state: present
+      when: fvmw_action == 'deploy'
+
+    - name: Create shared disk PVC
+      kubernetes.core.k8s:
+        state: "{{ 'present' if fvmw_action == 'deploy' else 'absent' }}"
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{ fvmw_disk_pvc }}"
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadOnlyMany
+            resources:
+              requests:
+                storage: 50Gi
+            storageClassName: "{{ storage_class if storage_class else omit }}"
+      when: fvmw_action == 'deploy'
+
+    - name: Create fvmw Secret with credentials
+      kubernetes.core.k8s:
+        state: "{{ 'present' if fvmw_action == 'deploy' else 'absent' }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: fvmw-credentials
+            namespace: "{{ namespace }}"
+          type: Opaque
+          stringData:
+            username: "{{ fvmw_username }}"
+            password: "{{ fvmw_password }}"
+      when: fvmw_action == 'deploy'
+
+    - name: Deploy per-user fvmw instances
+      when: fvmw_action == 'deploy'
+      loop: "{{ fvmw_users }}"
+      loop_control:
+        loop_var: fvmw_user
+      include_tasks: tasks/deploy-user.yml
+
+    - name: Teardown per-user fvmw instances
+      when: fvmw_action == 'teardown'
+      loop: "{{ fvmw_users }}"
+      loop_control:
+        loop_var: fvmw_user
+      include_tasks: tasks/teardown-user.yml
+
+    - name: Teardown shared resources
+      when: fvmw_action == 'teardown'
+      block:
+        - name: Delete shared disk PVC
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: PersistentVolumeClaim
+            name: "{{ fvmw_disk_pvc }}"
+            namespace: "{{ namespace }}"
+            state: absent
+
+        - name: Delete credentials secret
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Secret
+            name: fvmw-credentials
+            namespace: "{{ namespace }}"
+            state: absent

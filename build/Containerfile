@@ -1,0 +1,18 @@
+FROM registry.access.redhat.com/ubi9/go-toolset:1.22 AS builder
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -o fvmw ./cmd/fvmw/
+
+FROM registry.access.redhat.com/ubi9-micro:latest
+
+COPY --from=builder /build/fvmw /usr/local/bin/fvmw
+COPY config/default.yaml /config/default.yaml
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/fvmw"]
+CMD ["-config", "/config/default.yaml"]

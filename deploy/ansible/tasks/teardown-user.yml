@@ -1,0 +1,28 @@
+---
+# Teardown a single fvmw instance for a user
+
+- name: "Teardown fvmw for {{ fvmw_user }}"
+  block:
+    - name: "Delete Route for {{ fvmw_user }}"
+      kubernetes.core.k8s:
+        api_version: route.openshift.io/v1
+        kind: Route
+        name: "vcenter-{{ fvmw_user }}"
+        namespace: "{{ namespace }}"
+        state: absent
+
+    - name: "Delete Service for {{ fvmw_user }}"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Service
+        name: "vcenter-{{ fvmw_user }}"
+        namespace: "{{ namespace }}"
+        state: absent
+
+    - name: "Delete Deployment for {{ fvmw_user }}"
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: "vcenter-{{ fvmw_user }}"
+        namespace: "{{ namespace }}"
+        state: absent

@@ -1,0 +1,17 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: vcenter-${USER}
+  labels:
+    app: fvmw
+    user: ${USER}
+spec:
+  host: vcenter-${USER}.apps.${CLUSTER_DOMAIN}
+  to:
+    kind: Service
+    name: vcenter-${USER}
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

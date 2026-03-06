@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fvmw-disks
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 50Gi
+  # Use a storage class that supports ReadOnlyMany (e.g. NFS, ODF CephFS)
+  # storageClassName: ocs-storagecluster-cephfs

@@ -1,0 +1,26 @@
+datacenter: "FVMW-DC"
+cluster: "FVMW-Cluster"
+host: "fvmw-esxi.example.com"
+datastore: "FVMW-DS"
+network: "VM Network"
+vms:
+  - name: "database-rhel"
+    guestId: "rhel9_64Guest"
+    disk: "db.vmdk"
+    memoryMB: 4096
+    numCPUs: 2
+  - name: "webserver-1"
+    guestId: "windows2019srv_64Guest"
+    disk: "web1.vmdk"
+    memoryMB: 4096
+    numCPUs: 2
+  - name: "webserver-2"
+    guestId: "windows2019srv_64Guest"
+    disk: "web2.vmdk"
+    memoryMB: 4096
+    numCPUs: 2
+  - name: "haproxy-rhel"
+    guestId: "rhel9_64Guest"
+    disk: "haproxy.vmdk"
+    memoryMB: 2048
+    numCPUs: 1
