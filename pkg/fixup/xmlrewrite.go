@@ -45,9 +45,11 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ct := rec.header.Get("Content-Type")
 	if len(body) > 0 && (ct == "" || ct == "text/xml" || ct == "text/xml; charset=utf-8" || ct == "application/xml") {
 		// Fix 1: namespace prefix
+		// Replace the declaration to use xsi prefix, and replace all usages.
+		// Keep the declaration (don't strip it) so the namespace is always bound.
 		body = bytes.ReplaceAll(body,
 			[]byte(`xmlns:_XMLSchema-instance="http://www.w3.org/2001/XMLSchema-instance"`),
-			[]byte{})
+			[]byte(`xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`))
 		body = bytes.ReplaceAll(body,
 			[]byte(`_XMLSchema-instance:type=`),
 			[]byte(`xsi:type=`))
