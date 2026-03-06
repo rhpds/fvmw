@@ -62,7 +62,7 @@
               - ReadWriteMany
             resources:
               requests:
-                storage: 50Gi
+                storage: 100Gi
             storageClassName: "{{ storage_class if storage_class else omit }}"
       when: fvmw_action == 'deploy'
 

@@ -1,0 +1,85 @@
+---
+# workshop-setup.yml - Full workshop environment setup
+#
+# This playbook sets up everything needed to run the MTV migration demo
+# with fvmw on a workshop cluster. It:
+#   1. Builds the fvmw container image from GitHub
+#   2. Deploys vcenter + esxi pods per user
+#   3. Exports VMDKs from the real vCenter and converts to flat format
+#   4. Creates MTV provider, mappings, and target namespace per user
+#
+# Prerequisites:
+#   - Workshop cluster with MTV and CNV installed
+#   - Kubeconfig with cluster-admin access
+#   - Real vCenter accessible for VMDK export (or pre-built flat VMDKs)
+#
+# Usage:
+#   ansible-playbook workshop-setup.yml -e @../../workshop-deploy.env
+
+- name: Set up fvmw workshop environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    fvmw_namespace: fvmw
+    fvmw_image: image-registry.openshift-image-registry.svc:5000/fvmw/fvmw:latest
+    fvmw_password: changeme  # pragma: allowlist secret
+    fvmw_username: administrator@vsphere.local
+    fvmw_users: []
+    cluster_domain: ""
+    storage_class: ""
+    fvmw_disk_pvc: fvmw-disks
+    k8s_kubeconfig: ""
+    github_token: ""
+
+    # Real vCenter for VMDK export (optional - skip if disks already on PVC)
+    source_vcenter_url: "https://vcsrs00-vc.infra.demo.redhat.com/sdk"
+    source_vcenter_user: "Administrator@vsphere.local"
+    source_vcenter_password: ""
+    skip_disk_export: false
+
+    # VM names to export from real vCenter
+    source_vms:
+      - name: database
+        path: "/RS00/vm/Roadshow/database"
+      - name: winweb01
+        path: "/RS00/vm/Roadshow/winweb01"
+      - name: winweb02
+        path: "/RS00/vm/Roadshow/winweb02"
+      - name: haproxy
+        path: "/RS00/vm/Roadshow/haproxy-user1"
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - cluster_domain | length > 0
+          - fvmw_users | length > 0
+          - k8s_kubeconfig | length > 0
+        fail_msg: "cluster_domain, fvmw_users, and k8s_kubeconfig must be set."
+
+    # --- Step 1: Build fvmw image ---
+    - name: Build fvmw image
+      ansible.builtin.include_tasks: tasks/workshop-build.yml
+
+    # --- Step 2: Deploy fvmw pods ---
+    - name: Deploy fvmw infrastructure
+      ansible.builtin.import_tasks: deploy-core.yml
+      vars:
+        fvmw_action: deploy
+
+    # --- Step 3: Export and convert VMDKs ---
+    - name: Export and convert VMDKs
+      when: not skip_disk_export
+      ansible.builtin.include_tasks: tasks/workshop-disks.yml
+
+    # --- Step 4: Create MTV resources per user ---
+    - name: Create MTV resources per user
+      loop: "{{ fvmw_users }}"
+      loop_control:
+        loop_var: fvmw_user
+      ansible.builtin.include_tasks: tasks/workshop-mtv-user.yml

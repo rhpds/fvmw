@@ -1,5 +1,7 @@
 bin/
 local.env
+local-*.env
+workshop-deploy.env
 .claude/
 *.swp
 *.swo
