@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"regexp"
+	"strings"
 )
 
 // XMLRewriter wraps an http.Handler and fixes XML compatibility issues
@@ -12,15 +13,13 @@ import (
 // Fixes applied:
 //
 //  1. Namespace prefix: govmomi generates _XMLSchema-instance: instead of xsi:
-//     for the XML Schema Instance namespace. Libvirt's xmlGetNsProp resolves
-//     by URI so this shouldn't matter, but we fix it for safety.
-//
-//  2. Empty changeSets: vcsim returns <changeSet> with op=assign but no <val>
-//     for nil Go values (e.g. cpuHotAddEnabled=nil). Libvirt tries to
-//     deserialize the missing value as AnyType and fails with
-//     "AnyType is missing 'type' property". We strip these empty changeSets.
+//  2. Empty changeSets: strip nil-value changeSets that libvirt can't parse
+//  3. Untyped OptionValue: add xsi:type to <value> elements
+//  4. ArrayOf* children: add xsi:type to MOR, int, string, boolean children
+//  5. ESXi mode: rewrite apiType to HostAgent when Host header has esxi- prefix
 type XMLRewriter struct {
-	Handler http.Handler
+	Handler    http.Handler
+	ESXiPrefix string // hostname prefix that triggers ESXi mode (e.g. "esxi-")
 }
 
 // emptyChangeSetRe matches changeSet elements that have op=assign but no <val>.
@@ -116,6 +115,17 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			[]byte(`<string xsi:type="xsd:string">`))
 		body = untypedBoolRe.ReplaceAll(body,
 			[]byte(`<boolean xsi:type="xsd:boolean">`))
+
+		// Fix 5: ESXi mode — when the request comes in on the ESXi hostname
+		// (esxi-vcenter-<user>), rewrite apiType from VirtualCenter to HostAgent.
+		// libvirt's vpx:// flow connects to vCenter first (VirtualCenter), then
+		// to the ESXi host (HostAgent). Both go to our fvmw, so we distinguish
+		// by hostname prefix.
+		if rw.ESXiPrefix != "" && strings.HasPrefix(r.Host, rw.ESXiPrefix) {
+			body = bytes.ReplaceAll(body,
+				[]byte(`<apiType>VirtualCenter</apiType>`),
+				[]byte(`<apiType>HostAgent</apiType>`))
+		}
 	}
 
 	for k, vals := range rec.header {

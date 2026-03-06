@@ -11,6 +11,14 @@
         namespace: "{{ fvmw_namespace }}"
         state: absent
 
+    - name: "Delete ESXi Route for {{ fvmw_user }}"
+      kubernetes.core.k8s:
+        api_version: route.openshift.io/v1
+        kind: Route
+        name: "esxi-{{ fvmw_user }}"
+        namespace: "{{ fvmw_namespace }}"
+        state: absent
+
     - name: "Delete Service for {{ fvmw_user }}"
       kubernetes.core.k8s:
         api_version: v1

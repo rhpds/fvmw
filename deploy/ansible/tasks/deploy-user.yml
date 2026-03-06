@@ -41,7 +41,7 @@
                       - name: FVMW_EXTERNAL_HOST
                         value: "vcenter-{{ fvmw_user }}.{{ cluster_domain }}"
                       - name: FVMW_HOST
-                        value: "vcenter-{{ fvmw_user }}.{{ cluster_domain }}"
+                        value: "esxi-{{ fvmw_user }}.{{ cluster_domain }}"
                       - name: FVMW_USER_SUFFIX
                         value: "-{{ fvmw_user }}"
                       - name: FVMW_USERNAME
@@ -117,6 +117,29 @@
               user: "{{ fvmw_user }}"
           spec:
             host: "vcenter-{{ fvmw_user }}.{{ cluster_domain }}"
+            to:
+              kind: Service
+              name: "vcenter-{{ fvmw_user }}"
+            port:
+              targetPort: 8080
+            tls:
+              termination: edge
+              insecureEdgeTerminationPolicy: Redirect
+
+    - name: "Create ESXi Route for {{ fvmw_user }}"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: route.openshift.io/v1
+          kind: Route
+          metadata:
+            name: "esxi-{{ fvmw_user }}"
+            namespace: "{{ fvmw_namespace }}"
+            labels:
+              app: fvmw
+              user: "{{ fvmw_user }}"
+          spec:
+            host: "esxi-{{ fvmw_user }}.{{ cluster_domain }}"
             to:
               kind: Service
               name: "vcenter-{{ fvmw_user }}"

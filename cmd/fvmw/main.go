@@ -72,7 +72,10 @@ func main() {
 	// Start our own HTTP listener that wraps vcsim's mux with the
 	// XML namespace rewriter. govmomi's encoder uses _XMLSchema-instance:
 	// instead of xsi: which breaks libvirt's ESX driver (used by virt-v2v).
-	rewriter := &fixup.XMLRewriter{Handler: model.Service.ServeMux}
+	rewriter := &fixup.XMLRewriter{
+		Handler:    model.Service.ServeMux,
+		ESXiPrefix: "esxi-",
+	}
 
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
