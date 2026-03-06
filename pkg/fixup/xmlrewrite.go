@@ -113,6 +113,12 @@ func addValueType(match []byte) []byte {
 }
 
 func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Skip rewriting for binary/file paths — they'd OOM the buffer
+	if strings.HasPrefix(r.URL.Path, "/folder/") || strings.HasPrefix(r.URL.Path, "/disk/") {
+		rw.Handler.ServeHTTP(w, r)
+		return
+	}
+
 	rec := &responseRecorder{
 		header: make(http.Header),
 		body:   &bytes.Buffer{},
