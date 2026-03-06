@@ -126,6 +126,100 @@
               termination: edge
               insecureEdgeTerminationPolicy: Redirect
 
+    - name: "Create ESXi Deployment for {{ fvmw_user }}"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "esxi-{{ fvmw_user }}"
+            namespace: "{{ fvmw_namespace }}"
+            labels:
+              app: fvmw-esxi
+              user: "{{ fvmw_user }}"
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: fvmw-esxi
+                user: "{{ fvmw_user }}"
+            template:
+              metadata:
+                labels:
+                  app: fvmw-esxi
+                  user: "{{ fvmw_user }}"
+              spec:
+                containers:
+                  - name: fvmw
+                    image: "{{ fvmw_image }}"
+                    ports:
+                      - containerPort: 8080
+                        protocol: TCP
+                    env:
+                      - name: FVMW_LISTEN_ADDR
+                        value: ":8080"
+                      - name: FVMW_DISK_PATH
+                        value: "/disks"
+                      - name: FVMW_EXTERNAL_HOST
+                        value: "esxi-{{ fvmw_user }}.{{ cluster_domain }}"
+                      - name: FVMW_USER_SUFFIX
+                        value: "-{{ fvmw_user }}"
+                      - name: FVMW_ESX_MODE
+                        value: "1"
+                      - name: FVMW_USERNAME
+                        valueFrom:
+                          secretKeyRef:
+                            name: fvmw-credentials
+                            key: username
+                      - name: FVMW_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: fvmw-credentials
+                            key: password
+                    volumeMounts:
+                      - name: disks
+                        mountPath: /disks
+                        readOnly: false
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        cpu: 500m
+                        memory: 256Mi
+                    readinessProbe:
+                      httpGet:
+                        path: /about
+                        port: 8080
+                      initialDelaySeconds: 3
+                      periodSeconds: 10
+                volumes:
+                  - name: disks
+                    persistentVolumeClaim:
+                      claimName: "{{ fvmw_disk_pvc }}"
+
+    - name: "Create ESXi Service for {{ fvmw_user }}"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "esxi-{{ fvmw_user }}"
+            namespace: "{{ fvmw_namespace }}"
+            labels:
+              app: fvmw-esxi
+              user: "{{ fvmw_user }}"
+          spec:
+            selector:
+              app: fvmw-esxi
+              user: "{{ fvmw_user }}"
+            ports:
+              - port: 8080
+                targetPort: 8080
+                protocol: TCP
+
     - name: "Create ESXi Route for {{ fvmw_user }}"
       kubernetes.core.k8s:
         state: present
@@ -136,13 +230,13 @@
             name: "esxi-{{ fvmw_user }}"
             namespace: "{{ fvmw_namespace }}"
             labels:
-              app: fvmw
+              app: fvmw-esxi
               user: "{{ fvmw_user }}"
           spec:
             host: "esxi-{{ fvmw_user }}.{{ cluster_domain }}"
             to:
               kind: Service
-              name: "vcenter-{{ fvmw_user }}"
+              name: "esxi-{{ fvmw_user }}"
             port:
               targetPort: 8080
             tls:
