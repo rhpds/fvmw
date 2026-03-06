@@ -16,7 +16,7 @@
   gather_facts: false
 
   vars:
-    namespace: fvmw
+    fvmw_namespace: fvmw
     fvmw_image_stream: fvmw
     github_repo_url: https://github.com/rhpds/fvmw.git
     github_repo: rhpds/fvmw
@@ -28,13 +28,13 @@
     - name: Validate required variables
       ansible.builtin.assert:
         that:
-          - namespace | length > 0
+          - fvmw_namespace | length > 0
 
     - name: Ensure namespace exists
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
-        name: "{{ namespace }}"
+        name: "{{ fvmw_namespace }}"
         state: present
 
     - name: Create source secret for private GitHub repo
@@ -45,7 +45,7 @@
           kind: Secret
           metadata:
             name: github-source-secret
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             annotations:
               build.openshift.io/source-secret-match-uri-1: "https://github.com/rhpds/*"
           type: kubernetes.io/basic-auth
@@ -61,7 +61,7 @@
           kind: ImageStream
           metadata:
             name: "{{ fvmw_image_stream }}"
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             labels:
               app: fvmw
 
@@ -73,7 +73,7 @@
           kind: BuildConfig
           metadata:
             name: fvmw
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             labels:
               app: fvmw
           spec:
@@ -102,7 +102,7 @@
         api_version: build.openshift.io/v1
         kind: BuildConfig
         name: fvmw
-        namespace: "{{ namespace }}"
+        namespace: "{{ fvmw_namespace }}"
       register: bc_info
 
     - name: Extract webhook secret from BuildConfig
@@ -118,7 +118,7 @@
 
     - name: Build webhook URL
       ansible.builtin.set_fact:
-        webhook_url: "{{ cluster_info.connection.host }}/apis/build.openshift.io/v1/namespaces/{{ namespace }}/buildconfigs/fvmw/webhooks/{{ actual_webhook_secret }}/github"
+        webhook_url: "{{ cluster_info.connection.host }}/apis/build.openshift.io/v1/namespaces/{{ fvmw_namespace }}/buildconfigs/fvmw/webhooks/{{ actual_webhook_secret }}/github"
 
     - name: Display webhook configuration
       ansible.builtin.debug:
@@ -138,19 +138,22 @@
             7. Events: Just the push event
 
           To trigger a build manually:
-            oc start-build fvmw -n {{ namespace }} --follow
+            oc start-build fvmw -n {{ fvmw_namespace }} --follow
 
-    - name: Start initial build
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: build.openshift.io/v1
-          kind: BuildRequest
-          metadata:
-            name: fvmw
-            namespace: "{{ namespace }}"
-      register: build_result
+    - name: Wait for initial build to start (via ConfigChange trigger)
+      kubernetes.core.k8s_info:
+        api_version: build.openshift.io/v1
+        kind: Build
+        namespace: "{{ fvmw_namespace }}"
+        label_selectors:
+          - "buildconfig=fvmw"
+      register: builds
+      until: builds.resources | length > 0
+      retries: 6
+      delay: 5
 
-    - name: Show build started
+    - name: Show build status
       ansible.builtin.debug:
-        msg: "Build triggered. Monitor with: oc logs -f buildconfig/fvmw -n {{ namespace }}"
+        msg: >-
+          Build {{ builds.resources[0].metadata.name }} is {{ builds.resources[0].status.phase }}.
+          Monitor with: oc logs -f buildconfig/fvmw -n {{ fvmw_namespace }}

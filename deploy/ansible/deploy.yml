@@ -7,7 +7,7 @@
 #
 # Required variables (set in local.env):
 #   cluster_domain: apps.cluster.example.com
-#   namespace: fvmw
+#   fvmw_namespace: fvmw
 #   fvmw_image: quay.io/rhpds/fvmw:latest
 #   fvmw_password: changeme
 #   fvmw_users: [user1, user2]
@@ -19,7 +19,7 @@
 
   vars:
     fvmw_action: deploy
-    namespace: fvmw
+    fvmw_namespace: fvmw
     fvmw_image: quay.io/rhpds/fvmw:latest
     fvmw_password: password
     fvmw_username: administrator@vsphere.local
@@ -40,7 +40,7 @@
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
-        name: "{{ namespace }}"
+        name: "{{ fvmw_namespace }}"
         state: present
       when: fvmw_action == 'deploy'
 
@@ -52,7 +52,7 @@
           kind: PersistentVolumeClaim
           metadata:
             name: "{{ fvmw_disk_pvc }}"
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
           spec:
             accessModes:
               - ReadOnlyMany
@@ -70,7 +70,7 @@
           kind: Secret
           metadata:
             name: fvmw-credentials
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
           type: Opaque
           stringData:
             username: "{{ fvmw_username }}"
@@ -99,7 +99,7 @@
             api_version: v1
             kind: PersistentVolumeClaim
             name: "{{ fvmw_disk_pvc }}"
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             state: absent
 
         - name: Delete credentials secret
@@ -107,5 +107,5 @@
             api_version: v1
             kind: Secret
             name: fvmw-credentials
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             state: absent

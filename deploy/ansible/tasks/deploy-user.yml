@@ -11,7 +11,7 @@
           kind: Deployment
           metadata:
             name: "vcenter-{{ fvmw_user }}"
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             labels:
               app: fvmw
               user: "{{ fvmw_user }}"
@@ -87,7 +87,7 @@
           kind: Service
           metadata:
             name: "vcenter-{{ fvmw_user }}"
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             labels:
               app: fvmw
               user: "{{ fvmw_user }}"
@@ -108,7 +108,7 @@
           kind: Route
           metadata:
             name: "vcenter-{{ fvmw_user }}"
-            namespace: "{{ namespace }}"
+            namespace: "{{ fvmw_namespace }}"
             labels:
               app: fvmw
               user: "{{ fvmw_user }}"

@@ -8,7 +8,7 @@
         api_version: route.openshift.io/v1
         kind: Route
         name: "vcenter-{{ fvmw_user }}"
-        namespace: "{{ namespace }}"
+        namespace: "{{ fvmw_namespace }}"
         state: absent
 
     - name: "Delete Service for {{ fvmw_user }}"
@@ -16,7 +16,7 @@
         api_version: v1
         kind: Service
         name: "vcenter-{{ fvmw_user }}"
-        namespace: "{{ namespace }}"
+        namespace: "{{ fvmw_namespace }}"
         state: absent
 
     - name: "Delete Deployment for {{ fvmw_user }}"
@@ -24,5 +24,5 @@
         api_version: apps/v1
         kind: Deployment
         name: "vcenter-{{ fvmw_user }}"
-        namespace: "{{ namespace }}"
+        namespace: "{{ fvmw_namespace }}"
         state: absent

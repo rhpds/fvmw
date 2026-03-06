@@ -17,7 +17,7 @@
   gather_facts: false
 
   vars:
-    namespace: fvmw
+    fvmw_namespace: fvmw
     github_repo: rhpds/fvmw
     github_token: ""
 
@@ -33,14 +33,14 @@
         api_version: build.openshift.io/v1
         kind: BuildConfig
         name: fvmw
-        namespace: "{{ namespace }}"
+        namespace: "{{ fvmw_namespace }}"
       register: bc_info
 
     - name: Fail if BuildConfig not found
       ansible.builtin.assert:
         that:
           - bc_info.resources | length > 0
-        fail_msg: "BuildConfig 'fvmw' not found in namespace '{{ namespace }}'. Run build.yml first."
+        fail_msg: "BuildConfig 'fvmw' not found in namespace '{{ fvmw_namespace }}'. Run build.yml first."
 
     - name: Extract webhook secret
       ansible.builtin.set_fact:
@@ -55,7 +55,7 @@
 
     - name: Build webhook URL
       ansible.builtin.set_fact:
-        webhook_url: "{{ cluster_info.connection.host }}/apis/build.openshift.io/v1/namespaces/{{ namespace }}/buildconfigs/fvmw/webhooks/{{ webhook_secret }}/github"
+        webhook_url: "{{ cluster_info.connection.host }}/apis/build.openshift.io/v1/namespaces/{{ fvmw_namespace }}/buildconfigs/fvmw/webhooks/{{ webhook_secret }}/github"
 
     - name: Check existing GitHub webhooks
       ansible.builtin.uri:
@@ -106,4 +106,4 @@
           build a new container image and push to the internal ImageStream.
 
           To use the built image in deployments, set in local.env:
-            fvmw_image: image-registry.openshift-image-registry.svc:5000/{{ namespace }}/fvmw:latest
+            fvmw_image: image-registry.openshift-image-registry.svc:5000/{{ fvmw_namespace }}/fvmw:latest
