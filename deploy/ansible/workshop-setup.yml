@@ -1,17 +1,16 @@
 ---
 # workshop-setup.yml - Full workshop environment setup
 #
-# This playbook sets up everything needed to run the MTV migration demo
-# with fvmw on a workshop cluster. It:
+# Sets up everything needed to run the MTV migration demo with fvmw:
 #   1. Builds the fvmw container image from GitHub
-#   2. Deploys vcenter + esxi pods per user
-#   3. Exports VMDKs from the real vCenter and converts to flat format
+#   2. Creates shared PVC and downloads flat VMDK disk images
+#   3. Deploys vcenter + esxi pods per user
 #   4. Creates MTV provider, mappings, and target namespace per user
 #
 # Prerequisites:
 #   - Workshop cluster with MTV and CNV installed
 #   - Kubeconfig with cluster-admin access
-#   - Real vCenter accessible for VMDK export (or pre-built flat VMDKs)
+#   - Disk server running on infra cluster (or real vCenter for export)
 #
 # Usage:
 #   ansible-playbook workshop-setup.yml -e @../../workshop-deploy.env
@@ -33,13 +32,14 @@
     k8s_kubeconfig: ""
     github_token: ""
 
-    # Real vCenter for VMDK export (optional - skip if disks already on PVC)
-    source_vcenter_url: "https://vcsrs00-vc.infra.demo.redhat.com/sdk"
-    source_vcenter_user: "Administrator@vsphere.local"
-    source_vcenter_password: ""
-    skip_disk_export: false
+    # Disk source: URL of the disk server hosting flat VMDKs
+    # If not set, falls back to exporting from source_vcenter
+    disk_source_url: "https://fvmw-disks.apps.ocpv-infra01.dal12.infra.demo.redhat.com"
 
-    # VM names to export from real vCenter
+    # Fallback: export from real vCenter (slower)
+    source_vcenter_url: ""
+    source_vcenter_user: ""
+    source_vcenter_password: ""  # pragma: allowlist secret
     source_vms:
       - name: database
         path: "/RS00/vm/Roadshow/database"
@@ -62,24 +62,190 @@
           - k8s_kubeconfig | length > 0
         fail_msg: "cluster_domain, fvmw_users, and k8s_kubeconfig must be set."
 
-    # --- Step 1: Build fvmw image ---
-    - name: Build fvmw image
+    # --- Step 1: Create namespace ---
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ fvmw_namespace }}"
+        state: present
+
+    # --- Step 2: Build fvmw image ---
+    - name: Run build playbook
       ansible.builtin.include_tasks: tasks/workshop-build.yml
+      when: false  # Skip if using pre-built image; set to true to build from source
 
-    # --- Step 2: Deploy fvmw pods ---
-    - name: Deploy fvmw infrastructure
-      ansible.builtin.import_tasks: deploy-core.yml
-      vars:
-        fvmw_action: deploy
+    # For now, just run build.yml separately:
+    # ansible-playbook build.yml -e @../../workshop-deploy.env
 
-    # --- Step 3: Export and convert VMDKs ---
-    - name: Export and convert VMDKs
-      when: not skip_disk_export
-      ansible.builtin.include_tasks: tasks/workshop-disks.yml
+    # --- Step 3: Deploy fvmw infrastructure (PVC, credentials, pods) ---
+    - name: Create shared disk PVC
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{ fvmw_disk_pvc }}"
+            namespace: "{{ fvmw_namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteMany
+            resources:
+              requests:
+                storage: 100Gi
+            storageClassName: "{{ storage_class if storage_class else omit }}"
 
-    # --- Step 4: Create MTV resources per user ---
-    - name: Create MTV resources per user
+    - name: Create credentials secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: fvmw-credentials
+            namespace: "{{ fvmw_namespace }}"
+          type: Opaque
+          stringData:
+            username: "{{ fvmw_username }}"
+            password: "{{ fvmw_password }}"
+
+    # --- Step 4: Download/prepare disk images ---
+    - name: Prepare disk images
+      ansible.builtin.include_tasks: tasks/prepare-disks.yml
+
+    # --- Step 5: Deploy per-user fvmw instances ---
+    - name: Deploy per-user fvmw instances
       loop: "{{ fvmw_users }}"
       loop_control:
         loop_var: fvmw_user
-      ansible.builtin.include_tasks: tasks/workshop-mtv-user.yml
+      ansible.builtin.include_tasks: tasks/deploy-user.yml
+
+    # --- Step 6: Create MTV resources per user ---
+    - name: Create MTV namespaces and providers
+      loop: "{{ fvmw_users }}"
+      loop_control:
+        loop_var: fvmw_user
+      block:
+        - name: "Create mtv-{{ fvmw_user }} namespace"
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "mtv-{{ fvmw_user }}"
+            state: present
+
+        - name: "Create vmexamples-{{ fvmw_user }} namespace"
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "vmexamples-{{ fvmw_user }}"
+            state: present
+
+        - name: "Create provider credentials for {{ fvmw_user }}"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: fvmw-credentials
+                namespace: "mtv-{{ fvmw_user }}"
+              type: Opaque
+              stringData:
+                user: "{{ fvmw_username }}"
+                password: "{{ fvmw_password }}"
+                insecureSkipVerify: "true"
+
+        - name: "Create VMware provider for {{ fvmw_user }}"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: forklift.konveyor.io/v1beta1
+              kind: Provider
+              metadata:
+                name: vmware
+                namespace: "mtv-{{ fvmw_user }}"
+              spec:
+                type: vsphere
+                url: "https://vcenter-{{ fvmw_user }}.{{ cluster_domain }}/sdk"
+                secret:
+                  name: fvmw-credentials
+                  namespace: "mtv-{{ fvmw_user }}"
+                settings:
+                  sdkEndpoint: vcenter
+
+        - name: "Create host provider for {{ fvmw_user }}"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: forklift.konveyor.io/v1beta1
+              kind: Provider
+              metadata:
+                name: host
+                namespace: "mtv-{{ fvmw_user }}"
+              spec:
+                type: openshift
+
+        - name: "Create network map for {{ fvmw_user }}"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: forklift.konveyor.io/v1beta1
+              kind: NetworkMap
+              metadata:
+                name: network-map
+                namespace: "mtv-{{ fvmw_user }}"
+              spec:
+                map:
+                  - source:
+                      type: pod
+                    destination:
+                      type: pod
+                provider:
+                  source:
+                    name: vmware
+                    namespace: "mtv-{{ fvmw_user }}"
+                  destination:
+                    name: host
+                    namespace: "mtv-{{ fvmw_user }}"
+
+        - name: "Create storage map for {{ fvmw_user }}"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: forklift.konveyor.io/v1beta1
+              kind: StorageMap
+              metadata:
+                name: storage-map
+                namespace: "mtv-{{ fvmw_user }}"
+              spec:
+                map:
+                  - source:
+                      id: datastore-19
+                    destination:
+                      storageClass: ocs-external-storagecluster-ceph-rbd
+                      accessMode: ReadWriteOnce
+                provider:
+                  source:
+                    name: vmware
+                    namespace: "mtv-{{ fvmw_user }}"
+                  destination:
+                    name: host
+                    namespace: "mtv-{{ fvmw_user }}"
+
+    - name: Workshop setup complete
+      ansible.builtin.debug:
+        msg: |
+          Workshop environment ready!
+
+          Per-user endpoints:
+          {% for user in fvmw_users %}
+            {{ user }}:
+              vCenter: https://vcenter-{{ user }}.{{ cluster_domain }}/sdk
+              MTV namespace: mtv-{{ user }}
+              Target namespace: vmexamples-{{ user }}
+          {% endfor %}
+
+          Credentials: {{ fvmw_username }} / {{ fvmw_password }}
+
+          Students can now follow the roadshow migration instructions.

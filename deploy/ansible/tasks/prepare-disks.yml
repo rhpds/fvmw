@@ -1,0 +1,143 @@
+---
+# prepare-disks.yml - Export VMDKs from real vCenter, convert to flat, load onto PVC
+#
+# This task file handles the full disk preparation pipeline:
+# 1. Create a helper pod with qemu-img
+# 2. Export VMDKs from real vCenter via govc export.ovf
+# 3. Convert streamOptimized → monolithicFlat
+# 4. Create stub .vmdk files for vcsim
+#
+# Required vars:
+#   fvmw_namespace, fvmw_disk_pvc
+#   source_vcenter_url, source_vcenter_user, source_vcenter_password
+#   source_vms (list of {name, path})
+#   disk_source_url (URL of disk server, alternative to vCenter export)
+
+- name: Create disk preparation pod
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: disk-prep
+        namespace: "{{ fvmw_namespace }}"
+      spec:
+        containers:
+          - name: prep
+            image: quay.io/fedora/fedora:latest
+            command: ["sleep", "infinity"]
+            volumeMounts:
+              - name: disks
+                mountPath: /disks
+            resources:
+              requests:
+                cpu: "2"
+                memory: 2Gi
+              limits:
+                cpu: "4"
+                memory: 4Gi
+        volumes:
+          - name: disks
+            persistentVolumeClaim:
+              claimName: "{{ fvmw_disk_pvc }}"
+
+- name: Wait for disk-prep pod
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: disk-prep
+    namespace: "{{ fvmw_namespace }}"
+  register: prep_pod
+  until: prep_pod.resources[0].status.phase == 'Running'
+  retries: 12
+  delay: 10
+
+- name: Install qemu-img in prep pod
+  kubernetes.core.k8s_exec:
+    namespace: "{{ fvmw_namespace }}"
+    pod: disk-prep
+    command: dnf install -y qemu-img
+  register: install_result
+  changed_when: "'Complete!' in install_result.stdout"
+
+- name: Download flat VMDKs from disk server
+  when: disk_source_url is defined and disk_source_url | length > 0
+  kubernetes.core.k8s_exec:
+    namespace: "{{ fvmw_namespace }}"
+    pod: disk-prep
+    command: >
+      bash -c "
+      for disk in database haproxy winweb01 winweb02; do
+        if [ ! -f /disks/${disk}-flat.vmdk ]; then
+          echo \"Downloading ${disk}-flat.vmdk...\"
+          curl -sk '{{ disk_source_url }}/${disk}-flat.vmdk' -o /disks/${disk}-flat.vmdk
+        else
+          echo \"${disk}-flat.vmdk already exists, skipping\"
+        fi
+        echo '# stub' > /disks/${disk}.vmdk
+      done
+      ls -lh /disks/
+      "
+  register: download_result
+
+- name: Show download result
+  when: download_result is defined
+  ansible.builtin.debug:
+    msg: "{{ download_result.stdout_lines | default([]) }}"
+
+- name: Export and convert from vCenter
+  when: disk_source_url is not defined or disk_source_url | length == 0
+  block:
+    - name: Install govc in prep pod
+      kubernetes.core.k8s_exec:
+        namespace: "{{ fvmw_namespace }}"
+        pod: disk-prep
+        command: >
+          bash -c "
+          curl -sL https://github.com/vmware/govmomi/releases/latest/download/govc_Linux_x86_64.tar.gz | tar xzf - -C /usr/local/bin govc
+          "
+
+    - name: Export and convert each VM disk
+      loop: "{{ source_vms }}"
+      loop_control:
+        loop_var: vm
+      kubernetes.core.k8s_exec:
+        namespace: "{{ fvmw_namespace }}"
+        pod: disk-prep
+        command: >
+          bash -c "
+          export GOVC_URL='{{ source_vcenter_url }}'
+          export GOVC_USERNAME='{{ source_vcenter_user }}'
+          export GOVC_PASSWORD='{{ source_vcenter_password }}'
+          export GOVC_INSECURE=1
+
+          if [ -f /disks/{{ vm.name }}-flat.vmdk ]; then
+            echo '{{ vm.name }}-flat.vmdk already exists, skipping'
+            exit 0
+          fi
+
+          echo 'Exporting {{ vm.name }}...'
+          mkdir -p /tmp/export
+          govc export.ovf -vm '{{ vm.path }}' /tmp/export/ || exit 1
+
+          SRC=\$(find /tmp/export -name '*.vmdk' | head -1)
+          echo 'Converting to flat format...'
+          qemu-img convert -p -O vmdk -o subformat=monolithicFlat \"\$SRC\" /disks/{{ vm.name }}-flat.vmdk
+          echo '# stub' > /disks/{{ vm.name }}.vmdk
+          rm -rf /tmp/export
+          ls -lh /disks/{{ vm.name }}*
+          "
+      register: export_result
+
+    - name: Show export results
+      ansible.builtin.debug:
+        msg: "{{ export_result.results | map(attribute='stdout_lines') | list }}"
+
+- name: Delete disk-prep pod
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Pod
+    name: disk-prep
+    namespace: "{{ fvmw_namespace }}"
+    state: absent
