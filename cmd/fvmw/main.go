@@ -14,6 +14,7 @@ import (
 	"github.com/rhpds/fvmw/pkg/fixup"
 	"github.com/rhpds/fvmw/pkg/inventory"
 	"github.com/rhpds/fvmw/pkg/nfc"
+	"github.com/rhpds/fvmw/pkg/rest"
 	"github.com/vmware/govmomi/simulator"
 )
 
@@ -60,6 +61,10 @@ func main() {
 	// We won't expose this port — we'll proxy through our own listener.
 	server := model.Service.NewServer()
 	defer server.Close()
+
+	// Register vSphere REST API handler (for os-migrate vmware.vmware_rest)
+	// Must be after NewServer() which initializes ServeMux.
+	rest.Register(model.Service.ServeMux, model.Service.Context, cfg.Username, cfg.Password)
 
 	// Set the server URL for disk download URLs
 	if cfg.ExternalHost != "" {
