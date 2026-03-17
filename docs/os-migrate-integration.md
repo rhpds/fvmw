@@ -285,7 +285,7 @@ openstack image create centos9-ch --container-format bare \
   --disk-format qcow2 --public --file /home/cloud-admin/centos9.qcow2
 
 # Create keypair (use the lab SSH key)
-openstack keypair create --public-key ~/lkjcdkey.pub bastion_key
+openstack keypair create --public-key ~/<GUID>key.pub bastion_key
 
 # Launch conversion host
 openstack server create --flavor migrate --key-name bastion_key \
@@ -300,7 +300,7 @@ exit
 ### 6. Install tools on conversion host
 
 ```bash
-ssh -i ~/.ssh/lkjcdkey.pem cloud-user@192.168.11.154
+ssh -i ~/.ssh/<GUID>key.pem cloud-user@192.168.11.154
 
 # Fix DNS (if needed)
 echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
@@ -325,7 +325,7 @@ cd vmware-migration-kit/plugins/modules/src/migrate
 go build -o ~/migrate .
 
 # Copy to conversion host
-scp -i ~/.ssh/lkjcdkey.pem ~/migrate cloud-user@192.168.11.154:/home/cloud-user/
+scp -i ~/.ssh/<GUID>key.pem ~/migrate cloud-user@192.168.11.154:/home/cloud-user/
 ```
 
 ### 8. Run the migration
@@ -367,10 +367,10 @@ Replace `GUID` with your lab GUID (e.g. `lkjcd`).
 Copy and run on the conversion host:
 
 ```bash
-scp -i ~/.ssh/lkjcdkey.pem ~/migrate-args.json \
+scp -i ~/.ssh/<GUID>key.pem ~/migrate-args.json \
   cloud-user@192.168.11.154:/home/cloud-user/
 
-ssh -i ~/.ssh/lkjcdkey.pem cloud-user@192.168.11.154 \
+ssh -i ~/.ssh/<GUID>key.pem cloud-user@192.168.11.154 \
   "echo nameserver 8.8.8.8 | sudo tee /etc/resolv.conf > /dev/null && \
    sudo /home/cloud-user/migrate /home/cloud-user/migrate-args.json"
 ```
