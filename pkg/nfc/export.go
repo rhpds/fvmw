@@ -94,6 +94,13 @@ type FVMWVirtualMachine struct {
 	ds *DiskServer
 }
 
+// RegisterObject interface — required for AddHandler. These are event callbacks
+// that we don't need to act on.
+func (vm *FVMWVirtualMachine) PutObject(_ *simulator.Context, _ mo.Reference)    {}
+func (vm *FVMWVirtualMachine) UpdateObject(_ *simulator.Context, _ mo.Reference, _ []types.PropertyChange) {
+}
+func (vm *FVMWVirtualMachine) RemoveObject(_ *simulator.Context, _ types.ManagedObjectReference) {}
+
 // ExportVm implements the vSphere ExportVm API method.
 // It creates an HttpNfcLease with disk download URLs for the VM's disks.
 func (vm *FVMWVirtualMachine) ExportVm(ctx *simulator.Context, req *types.ExportVm) soap.HasFault {
@@ -170,8 +177,10 @@ func (vm *FVMWVirtualMachine) ExportVm(ctx *simulator.Context, req *types.Export
 	}
 }
 
-// WrapVMs replaces all VirtualMachine objects in the vcsim registry with
-// FVMWVirtualMachine instances that support ExportVm.
+// WrapVMs registers FVMWVirtualMachine handlers for all VMs in the registry.
+// Uses AddHandler so the original *simulator.VirtualMachine stays in the map
+// for internal vcsim operations (snapshots, etc.), while our wrapper intercepts
+// ExportVm calls via the handler dispatch.
 func (ds *DiskServer) WrapVMs(ctx *simulator.Context) {
 	for _, entity := range ctx.Map.All("VirtualMachine") {
 		vm := ctx.Map.Get(entity.Reference()).(*simulator.VirtualMachine)
@@ -179,7 +188,7 @@ func (ds *DiskServer) WrapVMs(ctx *simulator.Context) {
 			VirtualMachine: vm,
 			ds:             ds,
 		}
-		ctx.Map.Put(wrapped)
+		ctx.Map.AddHandler(wrapped)
 	}
 }
 

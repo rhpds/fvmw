@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/rhpds/fvmw/pkg/nfc"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/simulator"
 	"github.com/vmware/govmomi/vim25/types"
@@ -258,14 +257,10 @@ func (h *Handler) handleVMSubresource(w http.ResponseWriter, r *http.Request, pa
 	http.Error(w, `{"error_type":"NOT_FOUND"}`, http.StatusNotFound)
 }
 
-// getSimVM extracts the underlying simulator.VirtualMachine from either
-// a direct VirtualMachine or an FVMWVirtualMachine wrapper.
+// getSimVM extracts the simulator.VirtualMachine from a registry object.
 func getSimVM(obj interface{}) *simulator.VirtualMachine {
-	switch v := obj.(type) {
-	case *simulator.VirtualMachine:
+	if v, ok := obj.(*simulator.VirtualMachine); ok {
 		return v
-	case *nfc.FVMWVirtualMachine:
-		return v.VirtualMachine
 	}
 	return nil
 }
