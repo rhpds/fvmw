@@ -1,0 +1,54 @@
+---
+# deploy-ui.yml - Deploy fvmw and verify UI on OpenShift Route
+#
+# Usage:
+#   ansible-playbook deploy-ui.yml -e @../../local.env
+
+- import_playbook: deploy.yml
+  vars:
+    fvmw_action: deploy
+
+- name: Verify fvmw UI via Route
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    cluster_domain: ""
+    fvmw_endpoint_host: "vcenter.{{ cluster_domain }}"
+    fvmw_validate_tls: false
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - cluster_domain | length > 0
+        fail_msg: "cluster_domain must be set. See local.env.example."
+
+    - name: Wait for /about endpoint
+      ansible.builtin.uri:
+        url: "https://{{ fvmw_endpoint_host }}/about"
+        method: GET
+        validate_certs: "{{ fvmw_validate_tls | bool }}"
+        status_code: 200
+      register: about_check
+      retries: 24
+      delay: 5
+      until: about_check.status == 200
+
+    - name: Verify UI endpoint
+      ansible.builtin.uri:
+        url: "https://{{ fvmw_endpoint_host }}/ui/"
+        method: GET
+        validate_certs: "{{ fvmw_validate_tls | bool }}"
+        status_code: 200
+      register: ui_check
+      retries: 12
+      delay: 5
+      until: ui_check.status == 200
+
+    - name: Show UI route details
+      ansible.builtin.debug:
+        msg: |
+          UI is reachable.
+          Endpoint: https://{{ fvmw_endpoint_host }}/ui/

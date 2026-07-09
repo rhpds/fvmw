@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/simulator"
 	"github.com/vmware/govmomi/vim25/types"
@@ -15,25 +16,31 @@ import (
 
 // Handler implements the vSphere REST API subset needed by os-migrate.
 // Endpoints:
-//   POST /api/session
-//   GET  /api/vcenter/vm
-//   GET  /api/vcenter/vm/{vm}/hardware/disk
-//   GET  /api/vcenter/vm/{vm}/hardware/disk/{disk}
+//
+//	POST /api/session
+//	GET  /api/vcenter/vm
+//	GET  /api/vcenter/vm/{vm}/hardware/disk
+//	GET  /api/vcenter/vm/{vm}/hardware/disk/{disk}
 type Handler struct {
-	ctx      *simulator.Context
-	username string
-	password string
+	ctx            *simulator.Context
+	credentials    map[string]string
+	scopeVMsByUser bool
 
 	mu       sync.Mutex
-	sessions map[string]bool
+	sessions map[string]string // token -> username
 }
 
-func NewHandler(ctx *simulator.Context, username, password string) *Handler {
+func NewHandler(ctx *simulator.Context, credentials map[string]string, scopeVMsByUser bool) *Handler {
+	credCopy := make(map[string]string, len(credentials))
+	for user, pass := range credentials {
+		credCopy[user] = pass
+	}
+
 	return &Handler{
-		ctx:      ctx,
-		username: username,
-		password: password,
-		sessions: make(map[string]bool),
+		ctx:            ctx,
+		credentials:    credCopy,
+		scopeVMsByUser: scopeVMsByUser,
+		sessions:       make(map[string]string),
 	}
 }
 
@@ -45,21 +52,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate session
-	token := r.Header.Get("vmware-api-session-id")
-	h.mu.Lock()
-	valid := h.sessions[token]
-	h.mu.Unlock()
+	// Accept session token (header/cookie) and basic auth for compatibility.
+	user, valid := h.authenticate(r)
 	if !valid {
 		http.Error(w, `{"error_type":"UNAUTHENTICATED"}`, http.StatusUnauthorized)
 		return
 	}
 
 	switch {
+	case path == "/api":
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"value": "ok"})
 	case path == "/api/vcenter/vm":
-		h.handleListVMs(w, r)
+		h.handleListVMs(w, r, user)
 	case strings.HasPrefix(path, "/api/vcenter/vm/"):
-		h.handleVMSubresource(w, r, path)
+		h.handleVMSubresource(w, r, path, user)
 	default:
 		http.NotFound(w, r)
 	}
@@ -81,18 +88,59 @@ func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, pass, ok := r.BasicAuth()
-	if !ok || user != h.username || pass != h.password {
+	if !ok || !h.validCredentials(user, pass) {
 		http.Error(w, `{"error_type":"UNAUTHENTICATED"}`, http.StatusUnauthorized)
 		return
 	}
 
-	token := fmt.Sprintf("fvmw-session-%d", len(h.sessions)+1)
+	token := "fvmw-session-" + uuid.NewString()
 	h.mu.Lock()
-	h.sessions[token] = true
+	h.sessions[token] = user
 	h.mu.Unlock()
 
+	// Return token in body and headers/cookie for broad client compatibility.
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("vmware-api-session-id", token)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "vmware-api-session-id",
+		Value:    token,
+		Path:     "/api",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 	_ = json.NewEncoder(w).Encode(token)
+}
+
+func (h *Handler) validCredentials(user, pass string) bool {
+	expectedPass, ok := h.credentials[user]
+	return ok && pass == expectedPass
+}
+
+func (h *Handler) authenticate(r *http.Request) (string, bool) {
+	// Preferred: vmware-api-session-id header/cookie.
+	token := strings.TrimSpace(r.Header.Get("vmware-api-session-id"))
+	if token == "" {
+		if c, err := r.Cookie("vmware-api-session-id"); err == nil {
+			token = strings.TrimSpace(c.Value)
+		}
+	}
+	if token != "" {
+		// Some clients may copy JSON string payload including quotes.
+		token = strings.Trim(token, "\"")
+		h.mu.Lock()
+		user, valid := h.sessions[token]
+		h.mu.Unlock()
+		if valid {
+			return user, true
+		}
+	}
+
+	// Fallback: basic auth.
+	user, pass, ok := r.BasicAuth()
+	if ok && h.validCredentials(user, pass) {
+		return user, true
+	}
+	return "", false
 }
 
 type vmSummary struct {
@@ -103,7 +151,7 @@ type vmSummary struct {
 	CPUCount      int32  `json:"cpu_count"`
 }
 
-func (h *Handler) handleListVMs(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleListVMs(w http.ResponseWriter, r *http.Request, user string) {
 	nameFilter := r.URL.Query().Get("names")
 	var results []vmSummary
 
@@ -114,8 +162,8 @@ func (h *Handler) handleListVMs(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var props struct {
-			Name   string
-			Config *types.VirtualMachineConfigInfo
+			Name    string
+			Config  *types.VirtualMachineConfigInfo
 			Runtime types.VirtualMachineRuntimeInfo
 		}
 
@@ -127,6 +175,13 @@ func (h *Handler) handleListVMs(w http.ResponseWriter, r *http.Request) {
 		props.Name = simVM.Name
 		props.Config = simVM.Config
 		props.Runtime = simVM.Runtime
+
+		if h.scopeVMsByUser {
+			userSuffix := "-" + user
+			if !strings.HasSuffix(props.Name, userSuffix) {
+				continue
+			}
+		}
 
 		if nameFilter != "" && props.Name != nameFilter {
 			continue
@@ -157,7 +212,7 @@ func (h *Handler) handleListVMs(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(results)
 }
 
-func (h *Handler) handleVMSubresource(w http.ResponseWriter, r *http.Request, path string) {
+func (h *Handler) handleVMSubresource(w http.ResponseWriter, r *http.Request, path string, user string) {
 	// Parse: /api/vcenter/vm/{vm-id}/hardware/disk[/{disk-id}]
 	trimmed := strings.TrimPrefix(path, "/api/vcenter/vm/")
 	parts := strings.SplitN(trimmed, "/", 4) // vm-id[/hardware/disk[/disk-id]]
@@ -174,6 +229,14 @@ func (h *Handler) handleVMSubresource(w http.ResponseWriter, r *http.Request, pa
 	if simVM == nil {
 		http.Error(w, `{"error_type":"NOT_FOUND"}`, http.StatusNotFound)
 		return
+	}
+
+	if h.scopeVMsByUser {
+		userSuffix := "-" + user
+		if !strings.HasSuffix(simVM.Name, userSuffix) {
+			http.Error(w, `{"error_type":"NOT_FOUND"}`, http.StatusNotFound)
+			return
+		}
 	}
 	config := simVM.Config
 
@@ -266,8 +329,8 @@ func getSimVM(obj interface{}) *simulator.VirtualMachine {
 }
 
 // Register adds the REST API handler to the given mux.
-func Register(mux *http.ServeMux, ctx *simulator.Context, username, password string) {
-	handler := NewHandler(ctx, username, password)
+func Register(mux *http.ServeMux, ctx *simulator.Context, credentials map[string]string, scopeVMsByUser bool) {
+	handler := NewHandler(ctx, credentials, scopeVMsByUser)
 	mux.Handle("/api/", handler)
 	log.Println("Registered vSphere REST API handler at /api/")
 }

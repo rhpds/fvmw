@@ -11,7 +11,7 @@ FVMW does not include a vCenter web GUI. Use these `govc` commands to browse the
 go install github.com/vmware/govmomi/govc@latest
 
 # Set connection variables (replace <user>, <password>, <cluster>)
-export GOVC_URL="https://administrator@vsphere.local:<password>@vcenter-<user>.apps.<cluster>/sdk"
+export GOVC_URL="https://<user>:<password>@vcenter.apps.<cluster>/sdk"
 export GOVC_INSECURE=1
 ```
 

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fvmw.fullname" . }}
+  labels:
+    {{- include "fvmw.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "fvmw.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: 8080
+      protocol: TCP

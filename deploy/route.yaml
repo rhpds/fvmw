@@ -1,15 +1,14 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: vcenter-${USER}
+  name: vcenter
   labels:
     app: fvmw
-    user: ${USER}
 spec:
-  host: vcenter-${USER}.apps.${CLUSTER_DOMAIN}
+  host: vcenter.apps.${CLUSTER_DOMAIN}
   to:
     kind: Service
-    name: vcenter-${USER}
+    name: vcenter
   port:
     targetPort: 8080
   tls:
