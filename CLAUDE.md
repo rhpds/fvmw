@@ -8,7 +8,7 @@ The inventory matches the [OpenShift Virtualization Roadshow](https://rhpds.gith
 
 ## Architecture
 
-- **Two pods per user** — VPX pod (vCenter, `apiType=VirtualCenter`) + ESXi pod (`apiType=HostAgent`)
+- **Single shared endpoint** — one fvmw pod/route serves all users at `vcenter.<domain>`
 - **Plain HTTP** — fvmw listens on `:8080` (HTTP only); TLS is handled by OpenShift Route (edge termination)
 - **XML rewriter** — fixes vcsim XML for libvirt ESX driver compatibility (namespace prefixes, ArrayOf types, empty changeSets)
 - **Shared disks** — VMDK images in both flat and streamOptimized format on a ReadWriteMany CephFS PVC
@@ -17,10 +17,8 @@ The inventory matches the [OpenShift Virtualization Roadshow](https://rhpds.gith
 
 ## Key Technical Decisions
 
-### Dual Pod Architecture
-libvirt's `vpx://` driver connects to vCenter first (`apiType=VirtualCenter`), then to the ESXi host separately (`apiType=HostAgent`). A single fvmw instance can't serve both roles, so each user gets two pods:
-- `vcenter-<user>` — VPX model with datacenter/cluster/folder hierarchy
-- `esxi-<user>` — ESX model with flat VM structure
+### Shared Endpoint + Per-User Auth
+A single endpoint hosts all users. `FVMW_NUM_USERS` controls generated usernames (`user1..userN`) and each user authenticates with the shared `FVMW_PASSWORD`. The inventory includes per-user VM names (for example `database-user1`, `database-user2`) on one shared vCenter-compatible API endpoint.
 
 ### ExportVm Implementation
 vcsim does not implement `ExportVm`. We add it by wrapping `*simulator.VirtualMachine` with `FVMWVirtualMachine` (in `pkg/nfc/export.go`), which embeds the original and adds the `ExportVm` method. The wrapped VMs are registered in the vcsim registry via `ctx.Map.Put()` after inventory creation.
@@ -33,7 +31,8 @@ vcsim's XML responses are incompatible with libvirt's ESX driver in several ways
 2. **Empty changeSets:** nil Go values produce `<changeSet>` with no `<val>` — stripped
 3. **Untyped `<value>`:** OptionValue values without `xsi:type` — auto-detected
 4. **ArrayOf* children:** ALL children of `ArrayOf<Type>` elements need `xsi:type="<Type>"` — general solution scans for ArrayOf declarations and injects types dynamically
-5. **Binary paths:** `/folder/` and `/disk/` responses skip the rewriter to prevent OOM on large file downloads
+5. **HostAgent compatibility (optional):** `apiType` can be rewritten to `HostAgent` when the request host matches `FVMW_ESXI_PREFIX`
+6. **Binary paths:** `/folder/` and `/disk/` responses skip the rewriter to prevent OOM on large file downloads
 
 ### Disk Serving
 Two mechanisms for disk access:
@@ -63,10 +62,12 @@ scripts/test-local.sh          # Local start/stop/test helper
 deploy/ansible/
   bootstrap.yml                # One-time: namespace, SA, RBAC, kubeconfig
   build.yml                    # BuildConfig, ImageStream, GitHub webhook
-  deploy.yml                   # Per-user VPX + ESXi pods, services, routes
+  deploy.yml                   # Shared endpoint + direct LoadBalancer listener + per-user auth
+  deploy-ui.yml                # Deploy fvmw and verify UI route
+  disk-server.yml              # Host flat VMDKs for workshop clusters to download
+  prepare-disks.yml            # Populate the shared PVC with VM disks (http/s3/vcenter)
   setup-webhook.yml            # Register GitHub webhook via API
-  tasks/deploy-user.yml        # Per-user resource creation
-  tasks/teardown-user.yml      # Per-user cleanup
+  tasks/prepare-disks.yml      # Shared disk-download task logic
 local.env                      # Local secrets (gitignored)
 local.env.example              # Template for local.env
 ```
@@ -78,11 +79,13 @@ local.env.example              # Template for local.env
 | `FVMW_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `FVMW_DISK_PATH` | `/disks` | Path to VMDK files |
 | `FVMW_EXTERNAL_HOST` | _(none)_ | Hostname for disk download URLs (Route hostname) |
-| `FVMW_HOST` | _(none)_ | ESXi hostname in vCenter inventory (set to ESXi route) |
-| `FVMW_USERNAME` | `administrator@vsphere.local` | vSphere login username |
-| `FVMW_PASSWORD` | `password` | vSphere login password |
+| `FVMW_HOST` | _(none)_ | Hostname shown in inventory (set to shared route hostname) |
+| `FVMW_NUM_USERS` | `60` | Number of generated users (`user1..userN`) |
+| `FVMW_PASSWORD` | `password` | Shared password used by generated users |
+| `FVMW_USERNAME` | `administrator@vsphere.local` | Legacy single-user login username |
 | `FVMW_USER_SUFFIX` | _(none)_ | Appended to VM names (e.g. `-user1`) |
-| `FVMW_ESX_MODE` | _(none)_ | Set to `1` for ESXi (HostAgent) mode |
+| `FVMW_ESX_MODE` | _(none)_ | Legacy ESXi-only mode |
+| `FVMW_ESXI_PREFIX` | _(none)_ | Optional host prefix that forces `apiType=HostAgent` |
 | `FVMW_TRACE` | _(none)_ | Set to `1` for SOAP trace logging |
 
 ## Inventory (matching roadshow demo)

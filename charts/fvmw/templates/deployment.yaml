@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fvmw.fullname" . }}
+  labels:
+    {{- include "fvmw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fvmw.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fvmw.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      containers:
+        - name: fvmw
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: FVMW_LISTEN_ADDR
+              value: {{ .Values.fvmw.listenAddr | quote }}
+            - name: FVMW_DISK_PATH
+              value: {{ .Values.fvmw.diskPath | quote }}
+            - name: FVMW_EXTERNAL_HOST
+              value: {{ include "fvmw.host" . | quote }}
+            - name: FVMW_HOST
+              value: {{ include "fvmw.host" . | quote }}
+            - name: FVMW_NUM_USERS
+              value: {{ .Values.fvmw.numUsers | quote }}
+            {{- if .Values.fvmw.esxMode }}
+            - name: FVMW_ESX_MODE
+              value: "1"
+            {{- end }}
+            {{- if .Values.fvmw.trace }}
+            - name: FVMW_TRACE
+              value: "1"
+            {{- end }}
+            - name: FVMW_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fvmw.secretName" . }}
+                  key: password
+          volumeMounts:
+            - name: disks
+              mountPath: {{ .Values.fvmw.diskPath }}
+              readOnly: false
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /about
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /about
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+      volumes:
+        - name: disks
+          persistentVolumeClaim:
+            claimName: {{ include "fvmw.pvcName" . }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

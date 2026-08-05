@@ -1,7 +1,7 @@
 #!/bin/bash
 # Start/stop fvmw locally for testing.
 # Usage:
-#   ./scripts/test-local.sh start [esx]   # start in VPX or ESX mode
+#   ./scripts/test-local.sh start [esx]   # start shared endpoint (or legacy ESX mode)
 #   ./scripts/test-local.sh stop           # stop
 #   ./scripts/test-local.sh status         # check status
 #   ./scripts/test-local.sh test           # run govc tests
@@ -34,7 +34,7 @@ case "${1:-}" in
 
     # Start
     env FVMW_DISK_PATH="$DISK_PATH" FVMW_LISTEN_ADDR=":$PORT" \
-        FVMW_USER_SUFFIX="-user1" $ESX_ENV \
+        FVMW_NUM_USERS="2" FVMW_PASSWORD="password" $ESX_ENV \
         /tmp/fvmw-test -config config/default.yaml &
     echo $! > "$PIDFILE"
     sleep 2
@@ -59,7 +59,7 @@ case "${1:-}" in
     ;;
 
   test)
-    export GOVC_URL="http://administrator@vsphere.local:password@127.0.0.1:$PORT/sdk"
+    export GOVC_URL="http://user1:password@127.0.0.1:$PORT/sdk"
     export GOVC_INSECURE=1
     echo "=== About ===" && govc about
     echo "=== VMs ===" && govc find / -type m

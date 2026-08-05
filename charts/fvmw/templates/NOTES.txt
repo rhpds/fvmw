@@ -1,0 +1,29 @@
+fvmw has been deployed as "{{ include "fvmw.fullname" . }}" in namespace "{{ .Release.Namespace }}".
+
+{{- if .Values.route.enabled }}
+
+Endpoint:      https://{{ include "fvmw.host" . }}
+UI:            https://{{ include "fvmw.host" . }}/ui/
+vSphere SDK:   https://{{ include "fvmw.host" . }}/sdk
+{{- else }}
+
+Route creation is disabled (.Values.route.enabled=false); expose the
+"{{ include "fvmw.fullname" . }}" Service yourself (Ingress, LoadBalancer, etc).
+{{- end }}
+
+Login as user1..user{{ .Values.fvmw.numUsers }} with password:
+{{- if .Values.fvmw.existingSecret }}
+  (stored in existing secret "{{ .Values.fvmw.existingSecret }}")
+{{- else }}
+  {{ .Values.fvmw.password }}
+{{- end }}
+
+Check rollout status:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "fvmw.fullname" . }}
+
+{{- if not .Values.disks.existingClaim }}
+
+NOTE: the "{{ include "fvmw.pvcName" . }}" PVC was created empty. Populate it
+with the VMDK disk images (see deploy/ansible/prepare-disks.yml) before
+migrating VMs.
+{{- end }}

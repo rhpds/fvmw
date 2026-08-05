@@ -1,0 +1,69 @@
+---
+# prepare-disks.yml - Populate fvmw disk PVC from HTTP/S3/vCenter sources
+#
+# Usage:
+#   ansible-playbook prepare-disks.yml -e @../../local.env
+#
+# Common source mode examples:
+#   -e disk_source_mode=http    (requires disk_source_url)
+#   -e disk_source_mode=s3      (requires fvmw_datavolume_s3_* + vm.datavolume_s3_url)
+#   -e disk_source_mode=vcenter (requires source_vcenter_* vars)
+
+- name: Prepare fvmw disk PVC content
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    fvmw_namespace: fvmw
+    fvmw_disk_pvc: fvmw-disks
+    k8s_kubeconfig: ""
+    disk_source_mode: auto
+
+    disk_source_url: ""
+    source_vcenter_url: ""
+    source_vcenter_user: ""
+    source_vcenter_password: ""  # pragma: allowlist secret
+
+    fvmw_datavolume_s3_access_key_id: ""
+    fvmw_datavolume_s3_secret_key: ""  # pragma: allowlist secret
+    fvmw_datavolume_s3_region: us-east-1
+    fvmw_datavolume_s3_endpoint_url: ""
+    fvmw_datavolume_s3_signature_v2: false
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - fvmw_namespace | length > 0
+          - fvmw_disk_pvc | length > 0
+          - fvmw_vm_disks is defined
+          - fvmw_vm_disks | length > 0
+        fail_msg: "fvmw_namespace, fvmw_disk_pvc, and fvmw_vm_disks are required."
+
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ fvmw_namespace }}"
+        state: present
+
+    - name: Read disk PVC
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolumeClaim
+        name: "{{ fvmw_disk_pvc }}"
+        namespace: "{{ fvmw_namespace }}"
+      register: fvmw_disk_pvc_info
+
+    - name: Validate disk PVC exists
+      ansible.builtin.assert:
+        that:
+          - fvmw_disk_pvc_info.resources | length > 0
+        fail_msg: "PVC {{ fvmw_disk_pvc }} does not exist in namespace {{ fvmw_namespace }}."
+
+    - name: Run disk preparation tasks
+      ansible.builtin.include_tasks: tasks/prepare-disks.yml

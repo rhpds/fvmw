@@ -6,7 +6,7 @@ Built on [govmomi/vcsim](https://github.com/vmware/govmomi/tree/main/simulator) 
 
 ## What It Does
 
-- Simulates both vCenter and ESXi hosts (dual pod architecture)
+- Simulates a vCenter-compatible API on a single shared endpoint
 - Full vSphere SOAP API with datacenter, cluster, host, datastore, network, folder, and VMs
 - Serves flat VMDK disk images via the `/folder/` endpoint for virt-v2v disk transfer
 - Generates VMX files for libvirt domain XML parsing
@@ -16,7 +16,8 @@ Built on [govmomi/vcsim](https://github.com/vmware/govmomi/tree/main/simulator) 
 
 ## Demo Scenario
 
-Each user gets two pods (vCenter + ESXi) presenting 4 VMs in `/RS00/vm/Roadshow/`:
+One shared endpoint serves all users. Each authenticated user gets their own
+4 VM names in `/RS00/vm/Roadshow/`:
 
 | VM | Guest OS | Memory | CPUs | Disk | Controller |
 |----|----------|--------|------|------|------------|
@@ -40,6 +41,10 @@ make build
 ./scripts/test-local.sh start esx    # ESX mode
 ./scripts/test-local.sh test         # Run govc tests
 ./scripts/test-local.sh stop
+
+# Open read-only vCenter-like UI
+# (login: user1/password, user2/password, etc.)
+xdg-open "http://127.0.0.1:18443/ui/"
 ```
 
 ### Deploy to OpenShift
@@ -65,22 +70,37 @@ ansible-playbook deploy.yml -e @../../local.env
 
 See [deploy/ansible/README.md](deploy/ansible/README.md) for full details.
 
+### Deploy with Helm
+
+For deploying `fvmw` itself (Deployment/Service/Route/PVC/Secret) to
+additional clusters, a Helm chart is available at
+[charts/fvmw](charts/fvmw/README.md):
+
+```bash
+helm install fvmw charts/fvmw \
+  --namespace fvmw --create-namespace \
+  --set clusterDomain=apps.mycluster.example.com \
+  --set fvmw.password=changeme
+```
+
+Disk preparation (steps 3-4 above) is still done separately via
+`deploy/ansible/prepare-disks.yml`, or by pointing `disks.existingClaim` at
+an already-populated PVC.
+
 ## Architecture
 
 ```
-Per-user Pods:
+Shared Endpoint:
 
-vcenter-<user> Pod (VPX mode):         esxi-<user> Pod (ESX mode):
-+----------------------------+         +----------------------------+
-|  apiType: VirtualCenter    |         |  apiType: HostAgent        |
-|  DC: RS00                  |         |  VMs in /ha-datacenter/vm/ |
-|  Cluster: vcs-rs-00        |         |  Serves /folder/ for disks |
-|  VMs in /RS00/vm/Roadshow/ |         |  VMX files for libvirt     |
-|  FVMW_HOST -> esxi route   |         |                            |
-+----------------------------+         +----------------------------+
-       |                                       |
-   vcenter-<user> Route               esxi-<user> Route
-   (edge TLS)                          (edge TLS)
+vcenter.<cluster-domain> Route (edge TLS)
+                 |
+            fvmw Pod
+     +----------------------+
+     | apiType: VirtualCenter
+     | DC: RS00
+     | Cluster: vcs-rs-00
+     | VMs: *-user1, *-user2, ...
+     +----------------------+
 
 Shared CephFS PVC (/disks):
   database.vmdk, database-flat.vmdk
@@ -89,11 +109,10 @@ Shared CephFS PVC (/disks):
   haproxy.vmdk, haproxy-flat.vmdk
 
 MTV Migration Flow:
-  1. Provider -> vcenter route -> VPX pod (inventory sync)
-  2. virt-v2v -> vcenter route -> VPX pod (discover ESXi host)
-  3. virt-v2v -> esxi route -> ESXi pod (get VM info, download VMX)
-  4. virt-v2v -> vcenter route -> VPX pod (download flat VMDK via /folder/)
-  5. virt-v2v converts disk -> creates KubeVirt VM
+  1. Provider -> vcenter route -> fvmw (inventory sync)
+  2. virt-v2v -> vcenter route -> fvmw (VM discovery + VMX metadata)
+  3. virt-v2v -> vcenter route -> fvmw (download flat VMDK via /folder/)
+  4. virt-v2v converts disk -> creates KubeVirt VM
 ```
 
 ## Disk Preparation
@@ -123,23 +142,24 @@ Both the original (streamOptimized) and flat VMDKs remain on the PVC. The `-flat
 | `FVMW_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `FVMW_DISK_PATH` | `/disks` | Path to VMDK files |
 | `FVMW_EXTERNAL_HOST` | _(none)_ | Route hostname for ExportVm disk URLs |
-| `FVMW_HOST` | _(none)_ | ESXi hostname in vCenter inventory |
-| `FVMW_USERNAME` | `administrator@vsphere.local` | Login username |
-| `FVMW_PASSWORD` | `password` | Login password |
+| `FVMW_HOST` | _(none)_ | Hostname published in inventory (set to shared endpoint) |
+| `FVMW_NUM_USERS` | `60` | Number of generated users (`user1..userN`) |
+| `FVMW_PASSWORD` | `password` | Shared password used by generated users |
+| `FVMW_USERNAME` | `administrator@vsphere.local` | Legacy single-user login username |
 | `FVMW_USER_SUFFIX` | _(none)_ | Appended to VM names (e.g. `-user1`) |
-| `FVMW_ESX_MODE` | _(none)_ | Set to `1` for ESXi (HostAgent) mode |
+| `FVMW_ESX_MODE` | _(none)_ | Legacy ESXi-only mode |
+| `FVMW_ESXI_PREFIX` | _(none)_ | Optional hostname prefix that rewrites `apiType` to `HostAgent` |
 | `FVMW_TRACE` | _(none)_ | Set to `1` for SOAP request/response logging |
 
 ## How MTV Integration Works
 
-1. Create an MTV **VMware Provider** pointing to `https://vcenter-<user>.apps.<cluster>/sdk`
+1. Create an MTV **VMware Provider** pointing to `https://vcenter.<cluster>/sdk`
 2. MTV connects and syncs inventory via the vSphere SOAP API (handled by vcsim)
 3. Provider shows 4 VMs in `RS00/Roadshow/` with correct guest OS types
 4. Create NetworkMapping (pod networking) + StorageMapping (ceph-rbd)
 5. Create + execute Migration Plan (select `database-{user}`, `winweb01-{user}`, `winweb02-{user}`)
-6. virt-v2v connects via `vpx://` to the vCenter pod, discovers the ESXi host
-7. virt-v2v connects to the ESXi pod, downloads VMX and flat VMDK files
-8. virt-v2v converts the disk and creates a KubeVirt VM in OpenShift Virtualization
+6. virt-v2v connects to the shared endpoint and downloads VMX + flat VMDK files
+7. virt-v2v converts the disk and creates a KubeVirt VM in OpenShift Virtualization
 
 ## License
 

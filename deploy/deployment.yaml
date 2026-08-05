@@ -1,23 +1,20 @@
 # Reference manifest - see deploy/ansible/ for automated deployment.
-# To use manually: replace ${USER}, ${CLUSTER_DOMAIN} with actual values.
+# To use manually: replace ${CLUSTER_DOMAIN} and ${NUM_USERS}.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vcenter-${USER}
+  name: vcenter
   labels:
     app: fvmw
-    user: ${USER}
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: fvmw
-      user: ${USER}
   template:
     metadata:
       labels:
         app: fvmw
-        user: ${USER}
     spec:
       containers:
         - name: fvmw
@@ -31,12 +28,11 @@ spec:
             - name: FVMW_DISK_PATH
               value: "/disks"
             - name: FVMW_EXTERNAL_HOST
-              value: "vcenter-${USER}.${CLUSTER_DOMAIN}"
-            - name: FVMW_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: fvmw-credentials
-                  key: username
+              value: "vcenter.${CLUSTER_DOMAIN}"
+            - name: FVMW_HOST
+              value: "vcenter.${CLUSTER_DOMAIN}"
+            - name: FVMW_NUM_USERS
+              value: "${NUM_USERS}"
             - name: FVMW_PASSWORD
               valueFrom:
                 secretKeyRef:

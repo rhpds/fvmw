@@ -1,0 +1,1187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Virtual Machine Center UI</title>
+    <style>
+      :root {
+        --bg: #f4f6f8;
+        --surface: #ffffff;
+        --surface-alt: #f8fafb;
+        --border: #d7dce1;
+        --text: #21333b;
+        --muted: #5f7381;
+        --brand: #0065c9;
+        --ok: #2d9a6f;
+        --warn: #d9720b;
+        --danger: #c9213e;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        color: var(--text);
+        background: var(--bg);
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .auth-shell {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .auth-card {
+        width: 100%;
+        max-width: 460px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px;
+      }
+
+      .auth-title {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .auth-subtitle {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .field {
+        margin-top: 14px;
+      }
+
+      .field label {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 4px;
+        color: #31414a;
+      }
+
+      input[type="text"],
+      input[type="password"] {
+        width: 100%;
+        height: 36px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0 10px;
+        font-size: 14px;
+      }
+
+      input:focus {
+        border-color: var(--brand);
+        outline: 2px solid #c6e0ff;
+      }
+
+      .auth-actions {
+        margin-top: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .helper {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .error {
+        margin-top: 10px;
+        color: var(--danger);
+        font-size: 13px;
+        min-height: 18px;
+      }
+
+      .btn {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+      }
+
+      .btn:hover {
+        background: var(--surface-alt);
+      }
+
+      .btn.primary {
+        border-color: var(--brand);
+        color: var(--brand);
+        font-weight: 600;
+      }
+
+      .btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .topbar {
+        height: 56px;
+        background: #21333b;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 14px;
+      }
+
+      .topbar .title {
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      .topbar .meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .badge {
+        border: 1px solid #4f6672;
+        color: #d4e0e6;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 270px 1fr;
+        min-height: calc(100vh - 56px);
+      }
+
+      .sidebar {
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        padding: 12px;
+      }
+
+      .nav-group-title {
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin: 10px 8px 6px;
+      }
+
+      .nav-item {
+        width: 100%;
+        text-align: left;
+        padding: 9px 10px;
+        border: 0;
+        background: transparent;
+        border-radius: 6px;
+        font-size: 14px;
+        margin: 2px 0;
+      }
+
+      .nav-item.active {
+        background: #e8f2ff;
+        color: #084ea3;
+        font-weight: 600;
+      }
+
+      .content {
+        padding: 14px;
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .panel-head {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface-alt);
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .panel-head h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .panel-head .sub {
+        margin: 2px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(120px, 1fr));
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .stat {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+      }
+
+      .stat .label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .stat .value {
+        margin-top: 6px;
+        font-size: 21px;
+        font-weight: 600;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      thead th {
+        text-align: left;
+        font-weight: 600;
+        font-size: 13px;
+        color: #324752;
+        background: #f8fafb;
+        border-bottom: 1px solid var(--border);
+        padding: 9px 11px;
+      }
+
+      tbody td {
+        font-size: 13px;
+        padding: 10px 11px;
+        border-bottom: 1px solid #edf1f4;
+      }
+
+      tbody tr:hover {
+        background: #fafcff;
+      }
+
+      tbody tr.selected {
+        background: #ecf5ff;
+      }
+
+      .status {
+        font-weight: 600;
+      }
+
+      .status.ok {
+        color: var(--ok);
+      }
+
+      .status.warn {
+        color: var(--warn);
+      }
+
+      .vm-shell {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 12px;
+      }
+
+      .toolbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .toolbar input {
+        width: 280px;
+      }
+
+      .disabled-note {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .tabs {
+        display: flex;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tab {
+        border: 0;
+        background: transparent;
+        padding: 9px 12px;
+        font-size: 13px;
+      }
+
+      .tab.active {
+        color: var(--brand);
+        font-weight: 600;
+        box-shadow: inset 0 -2px 0 var(--brand);
+      }
+
+      .kv {
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--muted);
+        padding: 12px;
+      }
+
+      .kv strong {
+        color: var(--text);
+      }
+
+      .loading {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .warning {
+        font-size: 12px;
+        color: var(--warn);
+      }
+
+      @media (max-width: 1200px) {
+        .vm-shell {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 1024px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .stats {
+          grid-template-columns: repeat(2, minmax(120px, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section id="loginView" class="auth-shell">
+      <form id="loginForm" class="auth-card" autocomplete="off">
+        <h1 class="auth-title">Virtual Machine Center</h1>
+        <p class="auth-subtitle">
+          Live UI. Login with <code>userN</code> and password <code>password</code>.
+        </p>
+
+        <div class="field">
+          <label for="usernameInput">Username</label>
+          <input id="usernameInput" type="text" autocomplete="off" required />
+        </div>
+        <div class="field">
+          <label for="passwordInput">Password</label>
+          <input id="passwordInput" type="password" autocomplete="off" required />
+        </div>
+
+        <div class="auth-actions">
+          <span class="helper">Expected VM set: database, winweb01, winweb02, haproxy</span>
+          <button id="loginBtn" class="btn primary" type="submit">Sign In</button>
+        </div>
+        <div id="loginError" class="error" aria-live="polite"></div>
+      </form>
+    </section>
+
+    <section id="appView" class="hidden">
+      <header class="topbar">
+        <div class="title">Virtual Machine Center</div>
+        <div class="meta">
+          <span class="badge">Read-only mode</span>
+          <span id="headerEndpoint" class="badge"></span>
+          <span id="headerUser" class="badge"></span>
+          <button id="logoutBtn" class="btn" type="button">Logout</button>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="sidebar" aria-label="inventory navigation">
+          <div class="nav-group-title">Navigator</div>
+          <button class="nav-item active" data-section="dashboard" type="button">Dashboard</button>
+          <button class="nav-item" data-section="vms" type="button">VMs and Templates</button>
+          <button class="nav-item" data-section="hosts" type="button">Hosts and Clusters</button>
+          <button class="nav-item" data-section="datastores" type="button">Datastores</button>
+          <button class="nav-item" data-section="networks" type="button">Networking</button>
+          <button class="nav-item" data-section="tasks" type="button">Recent Tasks</button>
+
+          <div class="nav-group-title">Scope</div>
+          <div class="nav-item">Datacenter: RS00</div>
+          <div class="nav-item">Cluster: vcs-rs-00</div>
+          <div id="folderLabel" class="nav-item">Folder: Roadshow</div>
+        </aside>
+
+        <main class="content">
+          <section id="dashboardSection">
+            <div class="stats">
+              <article class="stat">
+                <div class="label">Total VMs</div>
+                <div id="statTotal" class="value">0</div>
+              </article>
+              <article class="stat">
+                <div class="label">Powered On</div>
+                <div id="statPoweredOn" class="value">0</div>
+              </article>
+              <article class="stat">
+                <div class="label">Allocated vCPU</div>
+                <div id="statCpu" class="value">0</div>
+              </article>
+              <article class="stat">
+                <div class="label">Allocated Memory</div>
+                <div id="statMem" class="value">0 GB</div>
+              </article>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>User Inventory</h2>
+                  <p class="sub">Loaded from the live REST API.</p>
+                </div>
+                <div id="expectedWarning" class="warning"></div>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>VM</th>
+                    <th>Power</th>
+                    <th>CPU</th>
+                    <th>Memory</th>
+                    <th>Storage</th>
+                  </tr>
+                </thead>
+                <tbody id="dashboardVmRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="vmsSection" class="hidden">
+            <div class="toolbar">
+              <input id="vmSearchInput" type="text" placeholder="Filter VMs by name" />
+              <div id="loadingIndicator" class="loading"></div>
+            </div>
+
+            <div class="vm-shell">
+              <div class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>VMs and Templates</h2>
+                    <p id="vmListSubtitle" class="sub"></p>
+                  </div>
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>VM Name</th>
+                      <th>Power</th>
+                      <th>CPU</th>
+                      <th>Memory</th>
+                      <th>MoRef</th>
+                    </tr>
+                  </thead>
+                  <tbody id="vmRows"></tbody>
+                </table>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 id="selectedVmTitle">VM Details</h2>
+                    <p class="sub">Summary and disk details from `/api/vcenter/vm/*`.</p>
+                  </div>
+                  <div>
+                    <button class="btn" type="button" disabled>Power On</button>
+                    <button class="btn" type="button" disabled>Edit Settings</button>
+                  </div>
+                </div>
+                <div class="tabs">
+                  <button class="tab active" type="button" data-vm-tab="summary">Summary</button>
+                  <button class="tab" type="button" data-vm-tab="hardware">Hardware</button>
+                  <button class="tab" type="button" data-vm-tab="storage">Storage</button>
+                  <button class="tab" type="button" data-vm-tab="network">Network</button>
+                </div>
+                <div id="vmDetailsBody" class="kv"></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="hostsSection" class="hidden">
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Hosts and Clusters</h2>
+                  <p class="sub">Read-only placeholder view.</p>
+                </div>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Host</th>
+                    <th>Status</th>
+                    <th>CPU Used</th>
+                    <th>Memory Used</th>
+                    <th>VM Count</th>
+                  </tr>
+                </thead>
+                <tbody id="hostRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="datastoresSection" class="hidden">
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Datastores</h2>
+                  <p class="sub">Read-only placeholder view.</p>
+                </div>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Capacity</th>
+                    <th>Free</th>
+                  </tr>
+                </thead>
+                <tbody id="datastoreRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="networksSection" class="hidden">
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Networking</h2>
+                  <p class="sub">Read-only placeholder view.</p>
+                </div>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Port Group</th>
+                    <th>Type</th>
+                    <th>VLAN</th>
+                    <th>Connected VMs</th>
+                  </tr>
+                </thead>
+                <tbody id="networkRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="tasksSection" class="hidden">
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Recent Tasks</h2>
+                  <p class="sub">Mock timeline for a read-only experience.</p>
+                </div>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Object</th>
+                    <th>Task</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody id="taskRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </main>
+      </div>
+    </section>
+
+    <script>
+      const SESSION_KEY = "vmc-ui-session";
+      const VALID_USER_RE = /^user\d+$/;
+      const BASE_ORDER = ["database", "winweb01", "winweb02", "haproxy"];
+      const DEFAULT_ENDPOINT =
+        window.location.protocol.startsWith("http") && window.location.origin !== "null"
+          ? window.location.origin
+          : "http://127.0.0.1:18443";
+
+      const state = {
+        endpoint: "",
+        token: "",
+        user: "",
+        section: "dashboard",
+        vmFilter: "",
+        selectedVmId: "",
+        vmTab: "summary",
+        vms: [],
+        vmDetails: {},
+      };
+
+      const els = {
+        loginView: document.getElementById("loginView"),
+        appView: document.getElementById("appView"),
+        loginForm: document.getElementById("loginForm"),
+        loginBtn: document.getElementById("loginBtn"),
+        usernameInput: document.getElementById("usernameInput"),
+        passwordInput: document.getElementById("passwordInput"),
+        loginError: document.getElementById("loginError"),
+        logoutBtn: document.getElementById("logoutBtn"),
+        loadingIndicator: document.getElementById("loadingIndicator"),
+        headerUser: document.getElementById("headerUser"),
+        headerEndpoint: document.getElementById("headerEndpoint"),
+        navButtons: Array.from(document.querySelectorAll(".nav-item[data-section]")),
+        sections: {
+          dashboard: document.getElementById("dashboardSection"),
+          vms: document.getElementById("vmsSection"),
+          hosts: document.getElementById("hostsSection"),
+          datastores: document.getElementById("datastoresSection"),
+          networks: document.getElementById("networksSection"),
+          tasks: document.getElementById("tasksSection"),
+        },
+        statTotal: document.getElementById("statTotal"),
+        statPoweredOn: document.getElementById("statPoweredOn"),
+        statCpu: document.getElementById("statCpu"),
+        statMem: document.getElementById("statMem"),
+        expectedWarning: document.getElementById("expectedWarning"),
+        dashboardVmRows: document.getElementById("dashboardVmRows"),
+        vmSearchInput: document.getElementById("vmSearchInput"),
+        vmRows: document.getElementById("vmRows"),
+        vmListSubtitle: document.getElementById("vmListSubtitle"),
+        selectedVmTitle: document.getElementById("selectedVmTitle"),
+        vmDetailsBody: document.getElementById("vmDetailsBody"),
+        vmTabs: Array.from(document.querySelectorAll(".tab[data-vm-tab]")),
+        hostRows: document.getElementById("hostRows"),
+        datastoreRows: document.getElementById("datastoreRows"),
+        networkRows: document.getElementById("networkRows"),
+        taskRows: document.getElementById("taskRows"),
+        folderLabel: document.getElementById("folderLabel"),
+      };
+
+      function normalizeEndpoint(v) {
+        return v.trim().replace(/\/+$/, "");
+      }
+
+      function baseFromName(name) {
+        const suffix = "-" + state.user;
+        if (name.endsWith(suffix)) return name.slice(0, -suffix.length);
+        return name;
+      }
+
+      function vmOrder(name) {
+        const base = baseFromName(name);
+        const idx = BASE_ORDER.indexOf(base);
+        return idx === -1 ? 999 : idx;
+      }
+
+      async function api(path, options) {
+        const res = await fetch(state.endpoint + path, options);
+        if (!res.ok) {
+          let body = "";
+          try {
+            body = await res.text();
+          } catch (_) {}
+          const err = new Error("API request failed");
+          err.status = res.status;
+          err.body = body;
+          throw err;
+        }
+        return res;
+      }
+
+      function setLoading(text) {
+        els.loadingIndicator.textContent = text || "";
+      }
+
+      function showAuthError(msg) {
+        els.loginError.textContent = msg;
+      }
+
+      function clearAuthError() {
+        els.loginError.textContent = "";
+      }
+
+      function showLogin() {
+        els.appView.classList.add("hidden");
+        els.loginView.classList.remove("hidden");
+      }
+
+      function showApp() {
+        els.loginView.classList.add("hidden");
+        els.appView.classList.remove("hidden");
+      }
+
+      function setSection(section) {
+        state.section = section;
+        Object.entries(els.sections).forEach(([name, node]) => {
+          if (name === section) node.classList.remove("hidden");
+          else node.classList.add("hidden");
+        });
+        els.navButtons.forEach((btn) => {
+          if (btn.dataset.section === section) btn.classList.add("active");
+          else btn.classList.remove("active");
+        });
+      }
+
+      async function createSession(user, password) {
+        const auth = btoa(user + ":" + password);
+        const res = await api("/api/session", {
+          method: "POST",
+          headers: { Authorization: "Basic " + auth },
+        });
+        return res.json();
+      }
+
+      async function deleteSession() {
+        if (!state.token) return;
+        try {
+          await api("/api/session", {
+            method: "DELETE",
+            headers: { "vmware-api-session-id": state.token },
+          });
+        } catch (_) {
+          // best effort
+        }
+      }
+
+      function toGiB(mib) {
+        return Math.round((Number(mib || 0) / 1024) * 10) / 10;
+      }
+
+      function synthesizeStorageGB(baseName) {
+        if (baseName === "database") return 5;
+        if (baseName === "winweb01" || baseName === "winweb02") return 21;
+        if (baseName === "haproxy") return 4;
+        return 10;
+      }
+
+      function parseExpectedWarning(vms) {
+        const expected = BASE_ORDER.map((b) => b + "-" + state.user);
+        const got = new Set(vms.map((v) => v.name));
+        const missing = expected.filter((n) => !got.has(n));
+        if (!missing.length) return "";
+        return "Missing expected VMs: " + missing.join(", ");
+      }
+
+      async function fetchVMs() {
+        const res = await api("/api/vcenter/vm", {
+          headers: { "vmware-api-session-id": state.token },
+        });
+        const data = await res.json();
+        data.sort((a, b) => vmOrder(a.name) - vmOrder(b.name) || a.name.localeCompare(b.name));
+        return data.map((item) => {
+          const base = baseFromName(item.name);
+          return {
+            id: item.vm,
+            name: item.name,
+            vmRef: item.vm,
+            base,
+            power: item.power_state || "POWERED_OFF",
+            poweredOn: item.power_state === "POWERED_ON",
+            cpu: Number(item.cpu_count || 0),
+            memoryGB: toGiB(item.memory_size_MiB),
+            diskGB: synthesizeStorageGB(base),
+            guest: base.startsWith("winweb") ? "Windows Server 2022" : base === "database" ? "CentOS 8 (64-bit)" : "Other Linux 5.x (64-bit)",
+            host: base.startsWith("winweb") ? "esxi-02.domain.tld" : "esxi-01.domain.tld",
+            ip: item.power_state === "POWERED_ON" ? "10.20." + (Math.max(1, item.vm.length % 9)) + "." + (10 + item.cpu_count) : "--",
+            datastore: "workload_share",
+            network: "segment-migrating-to-ocpvirt",
+          };
+        });
+      }
+
+      async function fetchVmStorage(vm) {
+        const res = await api("/api/vcenter/vm/" + encodeURIComponent(vm.vmRef) + "/hardware/disk", {
+          headers: { "vmware-api-session-id": state.token },
+        });
+        const disks = await res.json();
+        const details = [];
+        for (const disk of disks) {
+          const dRes = await api(
+            "/api/vcenter/vm/" +
+              encodeURIComponent(vm.vmRef) +
+              "/hardware/disk/" +
+              encodeURIComponent(disk.disk),
+            { headers: { "vmware-api-session-id": state.token } }
+          );
+          details.push(await dRes.json());
+        }
+        return details;
+      }
+
+      function getFilteredVms() {
+        if (!state.vmFilter) return state.vms;
+        return state.vms.filter((vm) => vm.name.toLowerCase().includes(state.vmFilter));
+      }
+
+      function getSelectedVm() {
+        return state.vms.find((vm) => vm.id === state.selectedVmId) || state.vms[0] || null;
+      }
+
+      function renderStats() {
+        const total = state.vms.length;
+        const poweredOn = state.vms.filter((vm) => vm.poweredOn).length;
+        const cpu = state.vms.reduce((sum, vm) => sum + vm.cpu, 0);
+        const mem = state.vms.reduce((sum, vm) => sum + vm.memoryGB, 0);
+        els.statTotal.textContent = String(total);
+        els.statPoweredOn.textContent = String(poweredOn);
+        els.statCpu.textContent = cpu + " vCPU";
+        els.statMem.textContent = mem + " GB";
+      }
+
+      function renderDashboardRows() {
+        els.dashboardVmRows.innerHTML = state.vms
+          .map((vm) => {
+            return (
+              "<tr>" +
+              "<td>" +
+              vm.name +
+              "</td>" +
+              "<td><span class=\"status " +
+              (vm.poweredOn ? "ok" : "warn") +
+              "\">" +
+              (vm.poweredOn ? "Powered On" : "Powered Off") +
+              "</span></td>" +
+              "<td>" +
+              vm.cpu +
+              " vCPU</td>" +
+              "<td>" +
+              vm.memoryGB +
+              " GB</td>" +
+              "<td>" +
+              vm.diskGB +
+              " GB</td>" +
+              "</tr>"
+            );
+          })
+          .join("");
+      }
+
+      function renderVmList() {
+        const rows = getFilteredVms();
+        els.vmListSubtitle.textContent = "User " + state.user + " - " + rows.length + " VM(s) from API";
+        if (!rows.length) {
+          els.vmRows.innerHTML = "<tr><td colspan=\"5\">No VMs found.</td></tr>";
+          return;
+        }
+        if (!rows.some((vm) => vm.id === state.selectedVmId)) state.selectedVmId = rows[0].id;
+
+        els.vmRows.innerHTML = rows
+          .map((vm) => {
+            return (
+              "<tr class=\"" +
+              (vm.id === state.selectedVmId ? "selected" : "") +
+              "\" data-vm-id=\"" +
+              vm.id +
+              "\">" +
+              "<td>" +
+              vm.name +
+              "</td>" +
+              "<td><span class=\"status " +
+              (vm.poweredOn ? "ok" : "warn") +
+              "\">" +
+              (vm.poweredOn ? "Powered On" : "Powered Off") +
+              "</span></td>" +
+              "<td>" +
+              vm.cpu +
+              " vCPU</td>" +
+              "<td>" +
+              vm.memoryGB +
+              " GB</td>" +
+              "<td>" +
+              vm.vmRef +
+              "</td>" +
+              "</tr>"
+            );
+          })
+          .join("");
+
+        Array.from(els.vmRows.querySelectorAll("tr[data-vm-id]")).forEach((row) => {
+          row.addEventListener("click", async () => {
+            state.selectedVmId = row.dataset.vmId;
+            renderVmList();
+            await ensureVmDetailsLoaded();
+            renderVmDetails();
+          });
+        });
+      }
+
+      function renderVmTabs() {
+        els.vmTabs.forEach((btn) => {
+          if (btn.dataset.vmTab === state.vmTab) btn.classList.add("active");
+          else btn.classList.remove("active");
+        });
+      }
+
+      async function ensureVmDetailsLoaded() {
+        const vm = getSelectedVm();
+        if (!vm) return;
+        if (state.vmDetails[vm.id]) return;
+        setLoading("Loading VM disk details...");
+        try {
+          const disks = await fetchVmStorage(vm);
+          state.vmDetails[vm.id] = { disks };
+        } catch (err) {
+          state.vmDetails[vm.id] = { disks: [], error: err.message || "disk detail load failed" };
+        } finally {
+          setLoading("");
+        }
+      }
+
+      function renderVmDetails() {
+        const vm = getSelectedVm();
+        if (!vm) {
+          els.selectedVmTitle.textContent = "VM Details";
+          els.vmDetailsBody.innerHTML = "Select a VM to inspect details.";
+          return;
+        }
+
+        els.selectedVmTitle.textContent = vm.name;
+        const detail = state.vmDetails[vm.id] || { disks: [] };
+        const disks = detail.disks || [];
+        const disksText = disks.length
+          ? disks
+              .map((d) => {
+                const capGB = Math.round((Number(d.capacity || 0) / (1024 * 1024 * 1024)) * 10) / 10;
+                const file = d.backing && d.backing.vmdk_file ? d.backing.vmdk_file : "(unknown)";
+                return d.label + " - " + capGB + " GB - " + file;
+              })
+              .join("<br />")
+          : "No disk details available";
+
+        const summary =
+          "<strong>Name:</strong> " +
+          vm.name +
+          "<br /><strong>MoRef:</strong> " +
+          vm.vmRef +
+          "<br /><strong>Power State:</strong> " +
+          vm.power +
+          "<br /><strong>Guest OS:</strong> " +
+          vm.guest +
+          "<br /><strong>User:</strong> " +
+          state.user;
+
+        const hardware =
+          "<strong>CPU:</strong> " +
+          vm.cpu +
+          " vCPU<br /><strong>Memory:</strong> " +
+          vm.memoryGB +
+          " GB<br /><strong>Firmware:</strong> EFI<br /><strong>CPU Reservation:</strong> 0 MHz<br /><strong>Memory Reservation:</strong> 0 MB";
+
+        const storage =
+          "<strong>Datastore:</strong> " +
+          vm.datastore +
+          "<br /><strong>Estimated Provisioned:</strong> " +
+          vm.diskGB +
+          " GB<br /><strong>Disk Inventory:</strong><br />" +
+          disksText;
+
+        const network =
+          "<strong>Network:</strong> " +
+          vm.network +
+          "<br /><strong>Adapter:</strong> vmxnet3<br /><strong>Connected:</strong> " +
+          (vm.poweredOn ? "Yes" : "No") +
+          "<br /><strong>IP Address:</strong> " +
+          vm.ip +
+          "<br /><strong>Host:</strong> " +
+          vm.host;
+
+        if (state.vmTab === "summary") els.vmDetailsBody.innerHTML = summary;
+        if (state.vmTab === "hardware") els.vmDetailsBody.innerHTML = hardware;
+        if (state.vmTab === "storage") els.vmDetailsBody.innerHTML = storage;
+        if (state.vmTab === "network") els.vmDetailsBody.innerHTML = network;
+      }
+
+      function renderPlaceholders() {
+        const host01 = state.vms.filter((v) => v.host.includes("01")).length;
+        const host02 = state.vms.filter((v) => v.host.includes("02")).length;
+        els.hostRows.innerHTML =
+          "<tr><td>esxi-01.domain.tld</td><td><span class=\"status ok\">Connected</span></td><td>18%</td><td>41%</td><td>" +
+          host01 +
+          "</td></tr>" +
+          "<tr><td>esxi-02.domain.tld</td><td><span class=\"status ok\">Connected</span></td><td>11%</td><td>34%</td><td>" +
+          host02 +
+          "</td></tr>";
+
+        els.datastoreRows.innerHTML =
+          "<tr><td>workload_share</td><td>vSAN</td><td>2.4 TB</td><td>1.8 TB</td></tr>";
+
+        els.networkRows.innerHTML =
+          "<tr><td>segment-migrating-to-ocpvirt</td><td>Distributed Port Group</td><td>210</td><td>" +
+          state.vms.length +
+          "</td></tr>";
+
+        els.taskRows.innerHTML = state.vms
+          .map((vm, i) => {
+            return (
+              "<tr><td>2026-07-06 18:0" +
+              i +
+              "</td><td>" +
+              vm.name +
+              "</td><td>Refresh inventory metadata</td><td><span class=\"status ok\">Completed</span></td></tr>"
+            );
+          })
+          .join("");
+      }
+
+      function renderMain() {
+        els.headerUser.textContent = state.user;
+        els.headerEndpoint.textContent = state.endpoint + "/sdk";
+        els.folderLabel.textContent = "Folder: Roadshow (" + state.user + ")";
+        renderStats();
+        renderDashboardRows();
+        renderVmList();
+        renderVmTabs();
+        renderVmDetails();
+        renderPlaceholders();
+        els.expectedWarning.textContent = parseExpectedWarning(state.vms);
+      }
+
+      async function loadInventory() {
+        setLoading("Loading inventory...");
+        try {
+          state.vms = await fetchVMs();
+          if (!state.vms.length) {
+            state.selectedVmId = "";
+          } else if (!state.vms.some((v) => v.id === state.selectedVmId)) {
+            state.selectedVmId = state.vms[0].id;
+          }
+          state.vmDetails = {};
+          await ensureVmDetailsLoaded();
+          renderMain();
+        } catch (err) {
+          const msg = err.status === 401 ? "Session expired, please log in again." : "Inventory load failed.";
+          showAuthError(msg);
+          await logout();
+        } finally {
+          setLoading("");
+        }
+      }
+
+      async function login(user, password, restoreSession) {
+        const normalized = normalizeEndpoint(DEFAULT_ENDPOINT);
+        if (!VALID_USER_RE.test(user)) {
+          showAuthError("Username must match userN (example: user1).");
+          return;
+        }
+
+        clearAuthError();
+        els.loginBtn.disabled = true;
+        try {
+          state.endpoint = normalized;
+          state.user = user;
+          state.token = restoreSession ? password : await createSession(user, password);
+          state.vmFilter = "";
+          state.selectedVmId = "";
+          state.vmTab = "summary";
+
+          sessionStorage.setItem(
+            SESSION_KEY,
+            JSON.stringify({
+              endpoint: state.endpoint,
+              user: state.user,
+              token: state.token,
+            })
+          );
+
+          showApp();
+          setSection(state.section);
+          await loadInventory();
+        } catch (err) {
+          const unauthorized = err.status === 401;
+          showAuthError(
+            unauthorized
+              ? "Authentication failed. Use valid userN/password credentials."
+              : "Login failed. Verify endpoint and connectivity."
+          );
+          showLogin();
+        } finally {
+          els.loginBtn.disabled = false;
+        }
+      }
+
+      async function logout() {
+        await deleteSession();
+        state.endpoint = "";
+        state.user = "";
+        state.token = "";
+        state.vms = [];
+        state.vmDetails = {};
+        sessionStorage.removeItem(SESSION_KEY);
+        els.usernameInput.value = "";
+        els.passwordInput.value = "";
+        showLogin();
+      }
+
+      function bindEvents() {
+        els.loginForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          await login(els.usernameInput.value.trim(), els.passwordInput.value.trim(), false);
+        });
+
+        els.logoutBtn.addEventListener("click", async () => {
+          await logout();
+        });
+
+        els.navButtons.forEach((btn) => {
+          btn.addEventListener("click", () => setSection(btn.dataset.section));
+        });
+
+        els.vmSearchInput.addEventListener("input", () => {
+          state.vmFilter = els.vmSearchInput.value.trim().toLowerCase();
+          renderVmList();
+        });
+
+        els.vmTabs.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.vmTab = btn.dataset.vmTab;
+            renderVmTabs();
+            renderVmDetails();
+          });
+        });
+      }
+
+      async function init() {
+        bindEvents();
+
+        const savedRaw = sessionStorage.getItem(SESSION_KEY);
+        if (!savedRaw) {
+          showLogin();
+          return;
+        }
+
+        try {
+          const saved = JSON.parse(savedRaw);
+          if (!saved.user || !saved.token) {
+            showLogin();
+            return;
+          }
+          await login(saved.user, saved.token, true);
+        } catch (_) {
+          sessionStorage.removeItem(SESSION_KEY);
+          showLogin();
+        }
+      }
+
+      init();
+    </script>
+  </body>
+</html>

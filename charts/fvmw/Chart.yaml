@@ -1,0 +1,13 @@
+apiVersion: v2
+name: fvmw
+description: Fake VMware API - a mock vCenter/ESXi server (built on govmomi/vcsim) that lets stock OpenShift MTV perform VM migrations without real VMware infrastructure.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/rhpds/fvmw
+keywords:
+  - vmware
+  - vcenter
+  - mtv
+  - migration
+  - virtualization

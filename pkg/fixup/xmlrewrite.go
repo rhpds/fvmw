@@ -2,10 +2,12 @@ package fixup
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // XMLRewriter wraps an http.Handler and fixes XML compatibility issues
@@ -17,10 +19,16 @@ import (
 //  2. Empty changeSets: strip nil-value changeSets that libvirt can't parse
 //  3. Untyped OptionValue: add xsi:type to <value> elements
 //  4. ArrayOf* children: add xsi:type to MOR, int, string, boolean children
-//  5. ESXi mode: rewrite apiType to HostAgent when Host header has esxi- prefix
+//  5. Optional HostAgent mode: rewrite apiType to HostAgent for matching hosts
+//  6. Remove TenantTenantManager field for older VDDK compatibility
 type XMLRewriter struct {
-	Handler    http.Handler
-	ESXiPrefix string // hostname prefix that triggers ESXi mode (e.g. "esxi-")
+	Handler        http.Handler
+	ESXiPrefix     string // optional hostname prefix that triggers HostAgent mode
+	ScopeVMsByUser bool
+	AllowedVMRefs  func(user string) map[string]struct{}
+
+	mu           sync.Mutex
+	soapSessions map[string]string // vmware_soap_session -> username
 }
 
 // emptyChangeSetRe matches changeSet elements that have op=assign but no <val>.
@@ -91,6 +99,35 @@ func addArrayOfChildTypes(body []byte) []byte {
 // These occur when vcsim serializes Go interface{} values (e.g. OptionValue.Value).
 var untypedValueRe = regexp.MustCompile(`<value>([^<]*)</value>`)
 
+var (
+	soapLoginUserRe     = regexp.MustCompile(`(?s)<userName>([^<]+)</userName>`)
+	soapSessionCookieRe = regexp.MustCompile(`(?:^|;\s*)vmware_soap_session=([^;]+)`)
+	// soapVMObjectSetRe matches a PropertyCollector update entry for a single
+	// VirtualMachine, as emitted by WaitForUpdatesEx — the actual
+	// inventory-enumeration mechanism govmomi/forklift use, e.g.:
+	//   <objectSet><kind>enter</kind><obj type="VirtualMachine">vm-23</obj><changeSet>...</changeSet></objectSet>
+	soapVMObjectSetRe = regexp.MustCompile(`(?s)<objectSet><kind>\w+</kind><obj type="VirtualMachine">([^<]+)</obj>.*?</objectSet>`)
+	// soapVMObjectContentRe matches the equivalent single-object entry as
+	// emitted by RetrievePropertiesEx (a structurally different, non-nested
+	// sibling-repeated format), e.g.:
+	//   <objects><obj type="VirtualMachine">vm-23</obj><propSet>...</propSet></objects>
+	soapVMObjectContentRe = regexp.MustCompile(`(?s)<objects><obj type="VirtualMachine">([^<]+)</obj>.*?</objects>`)
+	soapVMMORInArrayRe   = regexp.MustCompile(`<ManagedObjectReference[^>]*type="VirtualMachine"[^>]*>([^<]+)</ManagedObjectReference>`)
+	tenantManagerFieldRe = regexp.MustCompile(`(?s)<tenantManager[^>]*type="TenantTenantManager"[^>]*>.*?</tenantManager>`)
+)
+
+// emptyEnumDefaults maps XML element names for enum-typed fields (in
+// govmomi's vim25 types) that vcsim never sets to a "not applicable"
+// default value. These fields lack "omitempty" in their struct tags, so
+// vcsim always emits them, but leaves them as the Go zero value (empty
+// string) since it doesn't simulate the underlying feature.
+var emptyEnumDefaults = map[string]string{
+	"faultToleranceState":  "notConfigured",
+	"guestHeartbeatStatus": "gray",
+	"recordReplayState":    "inactive",
+	"overallStatus":        "green",
+}
+
 func addValueType(match []byte) []byte {
 	// Extract the content
 	content := untypedValueRe.FindSubmatch(match)
@@ -119,6 +156,17 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scopeSOAP := rw.shouldScopeSOAPRequest(r)
+
+	var soapLoginUser string
+	if scopeSOAP {
+		reqBody, err := io.ReadAll(r.Body)
+		if err == nil {
+			r.Body = io.NopCloser(bytes.NewReader(reqBody))
+			soapLoginUser = parseSOAPLoginUser(reqBody)
+		}
+	}
+
 	rec := &responseRecorder{
 		header: make(http.Header),
 		body:   &bytes.Buffer{},
@@ -128,6 +176,29 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rw.Handler.ServeHTTP(rec, r)
 
 	body := rec.body.Bytes()
+
+	if scopeSOAP {
+		if soapLoginUser != "" {
+			if id := parseSOAPSessionFromSetCookie(rec.header.Values("Set-Cookie")); id != "" {
+				rw.mu.Lock()
+				if rw.soapSessions == nil {
+					rw.soapSessions = make(map[string]string)
+				}
+				rw.soapSessions[id] = soapLoginUser
+				rw.mu.Unlock()
+			}
+		}
+		if bytes.Contains(body, []byte("<LogoutResponse")) {
+			if c, err := r.Cookie("vmware_soap_session"); err == nil {
+				rw.mu.Lock()
+				delete(rw.soapSessions, c.Value)
+				rw.mu.Unlock()
+			}
+		}
+		if user := rw.soapUserFromRequest(r); user != "" && rw.AllowedVMRefs != nil {
+			body = filterSOAPVMsByAllowedRefs(body, rw.AllowedVMRefs(user))
+		}
+	}
 
 	// Only rewrite XML/SOAP responses, not binary disk data
 	ct := rec.header.Get("Content-Type")
@@ -159,11 +230,26 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// vcsim omits xsi:type on ALL children inside ArrayOf* containers.
 		body = addArrayOfChildTypes(body)
 
-		// Fix 5: ESXi mode — when the request comes in on the ESXi hostname
-		// (esxi-vcenter-<user>), rewrite apiType from VirtualCenter to HostAgent.
-		// libvirt's vpx:// flow connects to vCenter first (VirtualCenter), then
-		// to the ESXi host (HostAgent). Both go to our fvmw, so we distinguish
-		// by hostname prefix.
+		// Fix 6: remove tenantTenantManager field.
+		// Older VDDK/libvirt stacks can fail hard when encountering
+		// the newer TenantTenantManager MOR type in ServiceContent.
+		body = tenantManagerFieldRe.ReplaceAll(body, []byte{})
+
+		// Fix 7: fill in empty enum fields that vcsim doesn't set a value
+		// for (Go zero value = ""), but whose struct tags lack "omitempty"
+		// so they're always emitted as an empty element. VDDK's strict
+		// C++ SOAP deserializer rejects an empty string for enum-typed
+		// fields (unlike govmomi's own lenient Go client), which breaks
+		// its GetSummary call during VixDiskLib_Open. Fill with a valid
+		// "not applicable" default for each.
+		for elem, defaultVal := range emptyEnumDefaults {
+			body = bytes.ReplaceAll(body,
+				[]byte("<"+elem+"></"+elem+">"),
+				[]byte("<"+elem+">"+defaultVal+"</"+elem+">"))
+		}
+
+		// Fix 5: Optional HostAgent mode — when the request host has the
+		// configured prefix, rewrite apiType from VirtualCenter to HostAgent.
 		if rw.ESXiPrefix != "" && strings.HasPrefix(r.Host, rw.ESXiPrefix) {
 			log.Println("ESXi mode: rewriting apiType to HostAgent")
 			body = bytes.ReplaceAll(body,
@@ -177,8 +263,96 @@ func (rw *XMLRewriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add(k, v)
 		}
 	}
+
+	if r.URL.Path == "/sdk" {
+		log.Printf("sdk request method=%s ua=%q status=%d response_len=%d", r.Method, r.UserAgent(), rec.code, len(body))
+	}
+
 	w.WriteHeader(rec.code)
 	_, _ = w.Write(body)
+}
+
+func parseSOAPLoginUser(body []byte) string {
+	if !bytes.Contains(body, []byte("<Login")) {
+		return ""
+	}
+	match := soapLoginUserRe.FindSubmatch(body)
+	if len(match) < 2 {
+		return ""
+	}
+	return string(match[1])
+}
+
+func parseSOAPSessionFromSetCookie(setCookies []string) string {
+	for _, line := range setCookies {
+		if m := soapSessionCookieRe.FindStringSubmatch(line); len(m) >= 2 {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+func filterSOAPVMsByAllowedRefs(body []byte, allowed map[string]struct{}) []byte {
+	// Remove PropertyCollector object updates for VMs the user should not see
+	// (WaitForUpdatesEx format).
+	body = soapVMObjectSetRe.ReplaceAllFunc(body, func(block []byte) []byte {
+		match := soapVMObjectSetRe.FindSubmatch(block)
+		if len(match) < 2 {
+			return block
+		}
+		if _, ok := allowed[string(match[1])]; ok {
+			return block
+		}
+		return []byte{}
+	})
+
+	// Same, for the RetrievePropertiesEx format.
+	body = soapVMObjectContentRe.ReplaceAllFunc(body, func(block []byte) []byte {
+		match := soapVMObjectContentRe.FindSubmatch(block)
+		if len(match) < 2 {
+			return block
+		}
+		if _, ok := allowed[string(match[1])]; ok {
+			return block
+		}
+		return []byte{}
+	})
+
+	// Remove VM ManagedObjectReference entries in arrays (e.g. childEntity listings).
+	body = soapVMMORInArrayRe.ReplaceAllFunc(body, func(elem []byte) []byte {
+		match := soapVMMORInArrayRe.FindSubmatch(elem)
+		if len(match) < 2 {
+			return elem
+		}
+		if _, ok := allowed[string(match[1])]; ok {
+			return elem
+		}
+		return []byte{}
+	})
+
+	return body
+}
+
+func (rw *XMLRewriter) soapUserFromRequest(r *http.Request) string {
+	cookie, err := r.Cookie("vmware_soap_session")
+	if err != nil || cookie.Value == "" {
+		return ""
+	}
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	return rw.soapSessions[cookie.Value]
+}
+
+func (rw *XMLRewriter) shouldScopeSOAPRequest(r *http.Request) bool {
+	if !rw.ScopeVMsByUser || r.Method != http.MethodPost || r.URL.Path != "/sdk" {
+		return false
+	}
+
+	// Apply SOAP inventory scoping only to govmomi/forklift clients.
+	// VDDK uses a different SOAP stack and has shown fragility with middleware
+	// that inspects/mutates generic SOAP traffic.
+	ua := strings.ToLower(r.UserAgent())
+	return strings.Contains(ua, "forklift") || strings.Contains(ua, "govmomi")
 }
 
 type responseRecorder struct {

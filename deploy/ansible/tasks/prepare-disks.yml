@@ -5,13 +5,51 @@
 # 1. Create a helper pod with qemu-img
 # 2. Export VMDKs from real vCenter via govc export.ovf
 # 3. Convert streamOptimized → monolithicFlat
-# 4. Create stub .vmdk files for vcsim
+# 4. Ensure descriptor + flat .vmdk pairs exist for vcsim
 #
 # Required vars:
 #   fvmw_namespace, fvmw_disk_pvc
 #   source_vcenter_url, source_vcenter_user, source_vcenter_password
-#   source_vms (list of {name, path})
+#   fvmw_vm_disks (list with name/source_vm_path/flat_vmdk_http_paths)
 #   disk_source_url (URL of disk server, alternative to vCenter export)
+# Optional vars:
+#   disk_source_mode: auto|http|s3|vcenter (default: auto)
+#   fvmw_datavolume_s3_access_key_id, fvmw_datavolume_s3_secret_key
+#   fvmw_datavolume_s3_region (default us-east-1)
+#   fvmw_datavolume_s3_endpoint_url (optional for non-AWS S3)
+#   fvmw_datavolume_s3_signature_v2 (optional, auto-enabled for IBM COS hosts)
+
+- name: Resolve disk source mode
+  ansible.builtin.set_fact:
+    fvmw_disk_source_mode_resolved: >-
+      {{
+        (disk_source_mode | default('auto'))
+        if (disk_source_mode | default('auto')) != 'auto'
+        else (
+          'http'
+          if (disk_source_url is defined and disk_source_url | length > 0)
+          else (
+            'vcenter'
+            if (source_vcenter_url is defined and source_vcenter_url | length > 0)
+            else 'none'
+          )
+        )
+      }}
+
+- name: Validate disk source mode and inputs
+  ansible.builtin.assert:
+    that:
+      - fvmw_disk_source_mode_resolved in ['http', 's3', 'vcenter']
+      - (fvmw_disk_source_mode_resolved != 'http') or (disk_source_url is defined and disk_source_url | length > 0)
+      - (fvmw_disk_source_mode_resolved != 'vcenter') or (source_vcenter_url is defined and source_vcenter_url | length > 0)
+      - (fvmw_disk_source_mode_resolved != 'vcenter') or (source_vcenter_user is defined and source_vcenter_user | length > 0)
+      - (fvmw_disk_source_mode_resolved != 'vcenter') or (source_vcenter_password is defined and source_vcenter_password | length > 0)
+      - (fvmw_disk_source_mode_resolved != 's3') or (fvmw_datavolume_s3_access_key_id is defined and fvmw_datavolume_s3_access_key_id | length > 0)
+      - (fvmw_disk_source_mode_resolved != 's3') or (fvmw_datavolume_s3_secret_key is defined and fvmw_datavolume_s3_secret_key | length > 0)
+      - (fvmw_disk_source_mode_resolved != 's3') or ((fvmw_vm_disks | rejectattr('datavolume_s3_url', 'defined') | list | length) == 0)
+    fail_msg: >-
+      Unable to prepare disks. Set disk_source_mode=http|s3|vcenter (or provide disk_source_url/source_vcenter_url for auto)
+      and ensure required credentials are present for the selected mode.
 
 - name: Create disk preparation pod
   kubernetes.core.k8s:
@@ -53,31 +91,57 @@
   retries: 12
   delay: 10
 
+- name: Wait for disk-prep container readiness
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: disk-prep
+    namespace: "{{ fvmw_namespace }}"
+  register: prep_pod_ready
+  until:
+    - prep_pod_ready.resources | length > 0
+    - prep_pod_ready.resources[0].status.phase == 'Running'
+    - prep_pod_ready.resources[0].status.containerStatuses is defined
+    - prep_pod_ready.resources[0].status.containerStatuses | length > 0
+    - prep_pod_ready.resources[0].status.containerStatuses[0].ready | default(false)
+  retries: 24
+  delay: 5
+
 - name: Install qemu-img in prep pod
+  when: fvmw_disk_source_mode_resolved == 'vcenter'
   kubernetes.core.k8s_exec:
     namespace: "{{ fvmw_namespace }}"
     pod: disk-prep
     command: dnf install -y qemu-img
   register: install_result
-  changed_when: "'Complete!' in install_result.stdout"
+  changed_when: "'Complete!' in (install_result.stdout | default(''))"
+  retries: 6
+  delay: 5
+  until: install_result is succeeded
 
-- name: Download flat VMDKs from disk server
-  when: disk_source_url is defined and disk_source_url | length > 0
+- name: Download VMDK file pairs from disk server
+  when: fvmw_disk_source_mode_resolved == 'http'
+  loop: "{{ fvmw_vm_disks }}"
+  loop_control:
+    loop_var: vm
+    label: "{{ vm.name }}"
   kubernetes.core.k8s_exec:
     namespace: "{{ fvmw_namespace }}"
     pod: disk-prep
-    command: >
+    command: |
       bash -c "
-      for disk in database haproxy winweb01 winweb02; do
-        if [ ! -f /disks/${disk}-flat.vmdk ]; then
-          echo \"Downloading ${disk}-flat.vmdk...\"
-          curl -sk '{{ disk_source_url }}/${disk}-flat.vmdk' -o /disks/${disk}-flat.vmdk
-        else
-          echo \"${disk}-flat.vmdk already exists, skipping\"
-        fi
-        echo '# stub' > /disks/${disk}.vmdk
-      done
-      ls -lh /disks/
+      {% set http_paths = vm.flat_vmdk_http_paths | default([vm.name ~ ".vmdk", vm.name ~ "-flat.vmdk"]) %}
+      {% for src in http_paths %}
+      SRC='{{ src }}'
+      DEST=$(basename "${SRC}")
+      if [ ! -f /disks/${DEST} ]; then
+        echo \"Downloading ${DEST}...\"
+        curl -sk '{{ disk_source_url }}/'\"${SRC}\" -o /disks/${DEST}
+      else
+        echo \"${DEST} already exists, skipping\"
+      fi
+      {% endfor %}
+      ls -lh /disks/{{ vm.name }}*.vmdk
       "
   register: download_result
 
@@ -86,47 +150,165 @@
   ansible.builtin.debug:
     msg: "{{ download_result.stdout_lines | default([]) }}"
 
+- name: Install s3cmd in prep pod
+  when: fvmw_disk_source_mode_resolved == 's3'
+  kubernetes.core.k8s_exec:
+    namespace: "{{ fvmw_namespace }}"
+    pod: disk-prep
+    command: dnf install -y s3cmd
+  register: install_s3cmd_result
+  changed_when: "'Complete!' in (install_s3cmd_result.stdout | default(''))"
+  retries: 6
+  delay: 5
+  until: install_s3cmd_result is succeeded
+
+- name: Download VMDK file pairs from S3
+  when: fvmw_disk_source_mode_resolved == 's3'
+  loop: "{{ fvmw_vm_disks }}"
+  loop_control:
+    loop_var: vm
+    label: "{{ vm.name }}"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ fvmw_namespace }}"
+    pod: disk-prep
+    command: |
+      bash -c "
+      S3_ACCESS_KEY='{{ fvmw_datavolume_s3_access_key_id }}'
+      S3_SECRET_KEY='{{ fvmw_datavolume_s3_secret_key }}'
+      S3_REGION_INPUT='{{ fvmw_datavolume_s3_region | default("us-east-1") }}'
+      AWS_ENDPOINT='{{ fvmw_datavolume_s3_endpoint_url | default("") }}'
+      S3_INPUT='{{ vm.datavolume_s3_url | regex_replace('/+$', '') }}'
+      S3_TARGET=${S3_INPUT#s3://}
+      S3_BUCKET=${S3_TARGET%%/*}
+      S3_REST=
+      if [ \"${S3_TARGET}\" != \"${S3_BUCKET}\" ]; then
+        S3_REST=${S3_TARGET#*/}
+      fi
+
+      # Accept IBM COS endpoint-style URIs:
+      #   s3://s3.<region>.cloud-object-storage.appdomain.cloud/<bucket>/<prefix>
+      # and normalize to:
+      #   s3://<bucket>/<prefix>
+      if [[ \"${S3_BUCKET}\" == *.cloud-object-storage.appdomain.cloud ]]; then
+        if [ -z \"${AWS_ENDPOINT}\" ]; then
+          AWS_ENDPOINT=\"https://${S3_BUCKET}\"
+        fi
+        if [ -z \"${S3_REST}\" ]; then
+          echo \"ERROR: datavolume_s3_url must include bucket after IBM COS endpoint host\"
+          exit 1
+        fi
+        S3_BUCKET=${S3_REST%%/*}
+        if [ \"${S3_REST}\" = \"${S3_BUCKET}\" ]; then
+          S3_PREFIX=
+        else
+          S3_PREFIX=${S3_REST#*/}
+        fi
+      else
+        S3_PREFIX=${S3_REST}
+      fi
+
+      S3_BASE=\"s3://${S3_BUCKET}\"
+      if [ -n \"${S3_PREFIX}\" ]; then
+        S3_BASE=\"${S3_BASE}/${S3_PREFIX}\"
+      fi
+
+      S3CMD_HOST=
+      S3CMD_HOST_BUCKET=
+      if [ -n \"${AWS_ENDPOINT}\" ]; then
+        S3CMD_HOST=${AWS_ENDPOINT#https://}
+        S3CMD_HOST=${S3CMD_HOST#http://}
+        S3CMD_HOST=${S3CMD_HOST%%/*}
+        S3CMD_HOST_BUCKET=\"%(bucket)s.${S3CMD_HOST}\"
+      fi
+
+      S3CMD_SIGV2='{{ "1" if (fvmw_datavolume_s3_signature_v2 | default(false)) else "0" }}'
+      if [[ \"${S3CMD_HOST}\" == *.cloud-object-storage.appdomain.cloud ]]; then
+        S3CMD_SIGV2=1
+      fi
+
+      S3_REGION_EFFECTIVE=${S3_REGION_INPUT}
+      if [[ \"${S3CMD_HOST}\" == *.cloud-object-storage.appdomain.cloud ]] && [ \"${S3_REGION_INPUT}\" = \"us-east-1\" ]; then
+        S3_REGION_EFFECTIVE=us-standard
+      fi
+
+      S3CMD_BASE_ARGS=\"--access_key=${S3_ACCESS_KEY} --secret_key=${S3_SECRET_KEY} --region=${S3_REGION_EFFECTIVE} --progress\"
+      if [ -n \"${S3CMD_HOST}\" ]; then
+        S3CMD_BASE_ARGS=\"${S3CMD_BASE_ARGS} --host=${S3CMD_HOST} --host-bucket=${S3CMD_HOST_BUCKET}\"
+      fi
+      if [ \"${S3CMD_SIGV2}\" = \"1\" ]; then
+        S3CMD_BASE_ARGS=\"${S3CMD_BASE_ARGS} --signature-v2\"
+      fi
+      echo \"Using s3cmd host=${S3CMD_HOST:-default} region=${S3_REGION_EFFECTIVE} sigv2=${S3CMD_SIGV2} base=${S3_BASE}\"
+      {% set s3_paths = vm.flat_vmdk_http_paths | default([vm.name ~ ".vmdk", vm.name ~ "-flat.vmdk"]) %}
+      {% for src in s3_paths %}
+      SRC='{{ src | regex_replace('^/+', '') }}'
+      DEST=$(basename "${SRC}")
+      if [ ! -f /disks/${DEST} ]; then
+        echo \"Downloading ${DEST} from ${S3_BASE}/${SRC}...\"
+        s3cmd ${S3CMD_BASE_ARGS} get --continue \"${S3_BASE}/${SRC}\" /disks/${DEST}
+      else
+        echo \"${DEST} already exists, skipping\"
+      fi
+      {% endfor %}
+      ls -lh /disks/{{ vm.name }}*.vmdk
+      "
+  register: download_s3_result
+  retries: 3
+  delay: 10
+  until: download_s3_result.rc == 0
+
+- name: Show S3 download result
+  when: download_s3_result is defined
+  ansible.builtin.debug:
+    msg: "{{ download_s3_result.stdout_lines | default([]) }}"
+
 - name: Export and convert from vCenter
-  when: disk_source_url is not defined or disk_source_url | length == 0
+  when: fvmw_disk_source_mode_resolved == 'vcenter'
   block:
     - name: Install govc in prep pod
       kubernetes.core.k8s_exec:
         namespace: "{{ fvmw_namespace }}"
         pod: disk-prep
-        command: >
+        command: |
           bash -c "
           curl -sL https://github.com/vmware/govmomi/releases/latest/download/govc_Linux_x86_64.tar.gz | tar xzf - -C /usr/local/bin govc
           "
 
     - name: Export and convert each VM disk
-      loop: "{{ source_vms }}"
+      loop: "{{ fvmw_vm_disks }}"
       loop_control:
         loop_var: vm
       kubernetes.core.k8s_exec:
         namespace: "{{ fvmw_namespace }}"
         pod: disk-prep
-        command: >
+        command: |
           bash -c "
           export GOVC_URL='{{ source_vcenter_url }}'
           export GOVC_USERNAME='{{ source_vcenter_user }}'
           export GOVC_PASSWORD='{{ source_vcenter_password }}'
           export GOVC_INSECURE=1
 
-          if [ -f /disks/{{ vm.name }}-flat.vmdk ]; then
-            echo '{{ vm.name }}-flat.vmdk already exists, skipping'
+          FLAT='{{ vm.flat_vmdk_filename | default(vm.name ~ "-flat.vmdk") }}'
+          STUB='{{ vm.stub_vmdk_filename | default(vm.name ~ ".vmdk") }}'
+          SOURCE_VM='{{ vm.source_vm_path | default(vm.path) }}'
+
+          if [ -f /disks/${FLAT} ]; then
+            echo \"${FLAT} already exists, skipping\"
             exit 0
           fi
 
           echo 'Exporting {{ vm.name }}...'
           mkdir -p /tmp/export
-          govc export.ovf -vm '{{ vm.path }}' /tmp/export/ || exit 1
+          govc export.ovf -vm \"${SOURCE_VM}\" /tmp/export/ || exit 1
 
-          SRC=\$(find /tmp/export -name '*.vmdk' | head -1)
+          SRC=$(find /tmp/export -name '*.vmdk' | head -1)
           echo 'Converting to flat format...'
-          qemu-img convert -p -O vmdk -o subformat=monolithicFlat \"\$SRC\" /disks/{{ vm.name }}-flat.vmdk
-          echo '# stub' > /disks/{{ vm.name }}.vmdk
+          # Convert using the descriptor output path. qemu-img then creates:
+          #   /disks/${STUB}       (descriptor)
+          #   /disks/${FLAT}       (large flat backing file)
+          qemu-img convert -p -O vmdk -o subformat=monolithicFlat \"\$SRC\" /disks/${STUB}
           rm -rf /tmp/export
-          ls -lh /disks/{{ vm.name }}*
+          ls -lh /disks/${STUB} /disks/${FLAT}
           "
       register: export_result
 

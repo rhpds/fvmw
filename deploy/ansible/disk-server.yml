@@ -16,6 +16,7 @@
 # Required in local.env:
 #   k8s_kubeconfig, cluster_domain, fvmw_namespace
 #   source_vcenter_url, source_vcenter_user, source_vcenter_password
+#   fvmw_vm_disks
 
 - name: Set up VMDK disk server
   hosts: localhost
@@ -35,16 +36,16 @@
     source_vcenter_user: "Administrator@vsphere.local"
     source_vcenter_password: ""  # pragma: allowlist secret
 
-    # VMs to export (name used for output filenames)
-    source_vms:
+    # VM disk catalog (name used for output filenames)
+    fvmw_vm_disks:
       - name: database
-        path: "/RS00/vm/Roadshow/database"
+        source_vm_path: "/RS00/vm/Roadshow/database"
       - name: winweb01
-        path: "/RS00/vm/Roadshow/winweb01"
+        source_vm_path: "/RS00/vm/Roadshow/winweb01"
       - name: winweb02
-        path: "/RS00/vm/Roadshow/winweb02"
+        source_vm_path: "/RS00/vm/Roadshow/winweb02"
       - name: haproxy
-        path: "/RS00/vm/Roadshow/haproxy-user1"
+        source_vm_path: "/RS00/vm/Roadshow/haproxy-user1"
 
   environment:
     K8S_AUTH_KUBECONFIG: "{{ k8s_kubeconfig | default(omit, true) }}"
@@ -55,7 +56,8 @@
         that:
           - cluster_domain | length > 0
           - fvmw_namespace | length > 0
-        fail_msg: "cluster_domain and fvmw_namespace must be set."
+          - fvmw_vm_disks | length > 0
+        fail_msg: "cluster_domain, fvmw_namespace, and fvmw_vm_disks must be set."
 
     # ========================
     #  DEPLOY
@@ -145,7 +147,7 @@
             msg: "{{ install_result.stdout_lines | default([]) }}"
 
         - name: Export and convert each VM disk
-          loop: "{{ source_vms }}"
+          loop: "{{ fvmw_vm_disks }}"
           loop_control:
             loop_var: vm
             label: "{{ vm.name }}"
@@ -165,9 +167,9 @@
               export GOVC_PASSWORD='{{ source_vcenter_password }}'
               export GOVC_INSECURE=1
 
-              echo 'Exporting {{ vm.name }} from {{ vm.path }}...'
+              echo 'Exporting {{ vm.name }} from {{ vm.source_vm_path | default(vm.path) }}...'
               mkdir -p /tmp/export/{{ vm.name }}
-              govc export.ovf -vm '{{ vm.path }}' /tmp/export/{{ vm.name }}/ || exit 1
+              govc export.ovf -vm '{{ vm.source_vm_path | default(vm.path) }}' /tmp/export/{{ vm.name }}/ || exit 1
 
               SRC=$(find /tmp/export/{{ vm.name }} -name '*.vmdk' -type f | head -1)
               if [ -z \"$SRC\" ]; then
@@ -176,8 +178,10 @@
               fi
 
               echo 'Converting to flat format...'
-              qemu-img convert -p -O vmdk -o subformat=monolithicFlat \"$SRC\" /disks/{{ vm.name }}-flat.vmdk || exit 1
-              echo '# stub' > /disks/{{ vm.name }}.vmdk
+              # Convert using descriptor output. qemu-img creates:
+              #   /disks/{{ vm.name }}.vmdk
+              #   /disks/{{ vm.name }}-flat.vmdk
+              qemu-img convert -p -O vmdk -o subformat=monolithicFlat \"$SRC\" /disks/{{ vm.name }}.vmdk || exit 1
               rm -rf /tmp/export/{{ vm.name }}
               echo 'Done:'
               ls -lh /disks/{{ vm.name }}*
@@ -339,7 +343,7 @@
 
               URL: https://fvmw-disks.{{ cluster_domain }}/
 
-              Workshop clusters should set in workshop-deploy.env:
+              Workshop clusters should set in local.env:
                 disk_source_url: https://fvmw-disks.{{ cluster_domain }}
 
     # ========================

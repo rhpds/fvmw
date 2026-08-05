@@ -1,0 +1,79 @@
+# Default values for the fvmw chart.
+
+image:
+  repository: quay.io/rhpds/fvmw
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Number of fvmw pod replicas. A single pod at the default resources below
+# gets CPU-throttled once more than a handful of concurrent MTV Providers/
+# migrations hit it. 2 replicas already avoids most throttling; 6 gives
+# comfortable headroom for ~60 concurrent users without over-reserving
+# cluster CPU that MTV's virt-v2v conversion pods also need.
+replicaCount: 6
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "4"
+    memory: 2Gi
+
+# fvmw application settings.
+fvmw:
+  # Number of simulated users to generate (user1..userN), each with their
+  # own database/winweb01/winweb02/haproxy VM set.
+  numUsers: 60
+  # Shared login password for all generated users. Ignored if
+  # existingSecret is set.
+  password: "changeme"
+  # Name of an existing Secret (with a "password" key) to use instead of
+  # creating one from .fvmw.password.
+  existingSecret: ""
+  listenAddr: ":8080"
+  diskPath: "/disks"
+  # Set to "1" to run in ESXi (HostAgent) mode instead of the default
+  # vCenter (VirtualCenter) mode.
+  esxMode: false
+  # Set to enable SOAP trace logging (FVMW_TRACE=1).
+  trace: false
+
+# Public hostname fvmw is reached at (used for disk download URLs, the
+# ESXi hostname in vCenter inventory, and the Route). Required unless
+# clusterDomain is set below.
+# host: vcenter.apps.cluster.example.com
+
+# Convenience: if `host` is not set, it is derived as "vcenter.<clusterDomain>".
+clusterDomain: ""
+
+# Shared ReadWriteMany PVC holding the VMDK disk images served by fvmw.
+disks:
+  # Create a new PVC. Set to false if using existingClaim.
+  create: true
+  pvcName: ""
+  size: 100Gi
+  # Must support ReadWriteMany, e.g. CephFS.
+  storageClassName: ""
+  accessMode: ReadWriteMany
+  # Reuse an already-populated PVC instead of creating a new one.
+  existingClaim: ""
+
+service:
+  port: 8080
+
+# OpenShift Route. Disable if deploying on plain Kubernetes and managing
+# ingress separately.
+route:
+  enabled: true
+  # Router timeout; slow PropertyCollector responses under many concurrent
+  # Providers can otherwise hit the router's default 30s timeout.
+  timeout: 180s
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

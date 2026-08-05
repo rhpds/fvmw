@@ -1,0 +1,17 @@
+{{- if and .Values.disks.create (not .Values.disks.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "fvmw.pvcName" . }}
+  labels:
+    {{- include "fvmw.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.disks.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.disks.size }}
+  {{- if .Values.disks.storageClassName }}
+  storageClassName: {{ .Values.disks.storageClassName }}
+  {{- end }}
+{{- end }}
