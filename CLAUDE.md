@@ -153,3 +153,46 @@ ansible-playbook deploy.yml -e @../../local.env -e fvmw_action=teardown
 - `make deploy` — run deploy playbook
 - `make teardown` — run teardown playbook
 - `go vet ./...` — lint
+
+## Operational Memory — 2026-10-20
+
+### Live shared deployment ownership
+
+- On ocpv01, the shared endpoint is `vcenter.apps.ocpv01.rhdp.net`, in namespace `fvmw-infra`, with six replicas and a 200Gi RWX CephFS PVC named `fvmw`.
+- Argo application `openshift-gitops/rhpds-infra-fvmw` manages it from `rhpds/infra`, path `helm/fvmw`, branch `main`. This repository's chart is not the source for that deployment. Observed Argo revision: `675966fc8719529e6ea75026778381c671078d71`.
+- Local `local.env` and `~/secrets/fvmw-mgmt.kubeconfig` pointed to ocpv-infra01, not ocpv01. Verify the target before operating; use explicit `--kubeconfig` flags. With `oc exec`, put these flags before `--`.
+- Argo reported Healthy even with unreadable disks: readiness/liveness check `/about`, not disk access. The observed Route OutOfSync was separate from the disk failure; Deployment and PVC were Synced.
+
+### Migration 403 diagnosis and repair
+
+- Reported failure: virt-v2v HEAD of `/folder/database-user3/database-flat.vmdk?dcPath=RS00&dsName=workloadshare` returned HTTP 403. The later temporary-file unlink error was secondary.
+- Reproduced HTTP 403 for all four VM disk URLs, and `Permission denied` reading the database extent on all six replicas.
+- Namespace/pod SELinux MCS was `s0:c44,c9`; `/disks` and its eight VMDK files had `container_file_t:s0:c637,c855`. Unix permissions permitted access. Existing privileged maintenance pod `hive-repair` could inspect the volume while application pods could not.
+- With explicit repair authorization, used the existing maintenance pod to change only the SELinux level on `/disks` and the eight named files to `s0:c9,c44` (equivalent category ordering). Did not change disk bytes, ownership, Unix permissions, credentials, manifests, or restart pods.
+- CephFS clients briefly retained old labels: the first post-repair test passed on only three replicas. Subsequent checks showed corrected labels and successful reads everywhere without further mutation. Do not declare success based only on `chcon` returning zero or one node's view.
+- Final verification: all four disks readable on every replica; authenticated public HEAD requests returned 200 with full disk sizes, and GET with `Range: bytes=0-511` returned 206 and 512 bytes for each disk.
+- Actual extents are `database-flat-flat.vmdk`, `winweb01-flat-flat.vmdk`, `winweb02-flat-flat.vmdk`, and `haproxy-flat-flat.vmdk`; their corresponding `*-flat.vmdk` PVC files are 512-byte descriptors. The datastore URL's `*-flat.vmdk` symlink correctly resolves to the actual extent.
+- What originally changed the labels remains unknown. No evidence established an application-code or chart defect causing the relabeling. Argo reconciliation of the current manifests does not itself repair existing file labels. Never hardcode ocpv01's MCS categories for another namespace or cluster; re-read its current allocation and inspect all volume consumers first.
+- Full MTV conversion was not rerun: the affected lab had already been destroyed. Disk-access recovery is verified; end-to-end migration is not.
+
+### Catalog credentials and historical lab
+
+- Provision DB identified GUID `84hv5` as `openshift-cnv.ocp-virt-roadshow-2026.prod`, sandbox `sandbox-84hv5-ocp4-cluster` on ocpv01, with state `destroy-complete` on October 20. The workshop URL suffix `6lkcd` was not the provision GUID.
+- FVMW credentials are defined directly in AgnosticV `openshift_cnv/ocp-virt-roadshow-2026/common.yaml`, variable `ocp4_workload_virt_roadshow_fvmw_vcenter_user_password`, as an Ansible Vault block, not a dedicated FVMW credentials include. Production deployer ref observed: `cnv-virt-roadshow-multi-3.0.5`.
+- Latest fetched Git vault block matched the live production AgnosticVComponent. Decryption with the existing local vault identity confirmed the password matched ocpv01's `fvmw-password` Secret; inventory authentication as `user3` returned HTTP 200. No credential update was needed.
+- An initial comparison incorrectly treated the YAML vault marker as a literal password. That mismatch finding was explicitly retracted. Compare decrypted values in memory and print only equality/status; never print or commit credentials. The deleted lab's original rendered credentials were not recovered.
+- Homebrew Ansible failed under Python 3.15 (`dataclasses._is_type` missing); the installed Vault API worked with Python 3.14 for this check. This was a local tooling issue, not failed vault authentication.
+
+### Fleet audit after repair
+
+Read-only snapshot on October 20; reverify before relying on it for a later incident:
+
+| Clusters | Result |
+|---|---|
+| ocpv01, ocpv02, ocpv03, ocpv06, ocpv07, ocpv08, ocpv09 | Six serving replicas each; all four disks readable and SELinux labels matched the namespace |
+| ocpvdev01 | Two serving replicas; same checks passed |
+| ocpv-infra01, ocpv-infra02 | No FVMW deployment found |
+| ocpv05, ocpv10 | API DNS failed; unverified, not proof of absence or health |
+
+- All eight reachable FVMW endpoints passed authenticated HEAD (200) and 512-byte range GET (206) checks for all four disks; 44 serving replicas passed direct reads. No additional repairs were made.
+- ocpv03 access was found under `~/secrets/troshka-shared-ocpv/`; top-level kubeconfig discovery alone missed it. Completed disk-preparation pods are not serving replicas and cannot be exec-tested.
